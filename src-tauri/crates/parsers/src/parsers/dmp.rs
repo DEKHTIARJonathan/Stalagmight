@@ -668,6 +668,7 @@ impl DmpShot {
     /// `ShotData::all_finite` plus the integrity banner are what surface those.
     pub fn to_shot_data(&self) -> crate::models::ShotData {
         crate::models::ShotData {
+            from_id: None,
             // mNemo dumps carry no shot identity; every shot gets a fresh mint.
             uuid: None,
             azimuth_in: crate::models::normalize_azimuth(self.heading_in),
@@ -2244,6 +2245,7 @@ mod tests {
             .filter(|s| s.shot_type == DmpShotType::Standard)
             .enumerate()
             .map(|(i, s)| Shot {
+                from_id: None,
                 number: None,
                 id: i as u32,
                 azimuth_in: s.heading_in,
@@ -2470,6 +2472,7 @@ mod tests {
             .filter(|s| s.shot_type == DmpShotType::Standard)
             .enumerate()
             .map(|(i, s)| Shot {
+                from_id: None,
                 number: None,
                 id: i as u32,
                 azimuth_in: s.heading_in,

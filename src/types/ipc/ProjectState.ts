@@ -3,5 +3,6 @@ import type { FrozenShotRef } from "./FrozenShotRef";
 import type { Project } from "./Project";
 import type { ProjectStats } from "./ProjectStats";
 import type { Station } from "./Station";
+import type { StationRef } from "./StationRef";
 
-export interface ProjectState { project: Project, stations: Array<Station>, stats: ProjectStats, frozen_shots: Array<FrozenShotRef>, }
+export interface ProjectState { shot_start_refs?: Array<StationRef>, project: Project, stations: Array<Station>, stats: ProjectStats, frozen_shots: Array<FrozenShotRef>, }

@@ -293,3 +293,13 @@ pub(crate) fn set_shot_kind_impl(
         kind,
     })
 }
+
+/// Replace the incoming connection of a shot by its immutable project number.
+#[tauri::command]
+pub fn set_shot_from_id(
+    state: State<AppState>,
+    shot_number: u32,
+    from_id: Option<u32>,
+) -> CommandResult {
+    state.set_shot_from_id(shot_number, from_id)
+}

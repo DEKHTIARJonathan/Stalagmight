@@ -78,6 +78,16 @@ impl Project {
         merge_adj: &HashMap<StationRef, Vec<StationRef>>,
         closure_adj: Option<&HashMap<StationRef, Vec<StationRef>>>,
     ) -> f64 {
+        if self.shot_graph.explicit {
+            return self
+                .graph_shortest_path(
+                    station_a,
+                    |station| station == station_b,
+                    merge_adj,
+                    closure_adj,
+                )
+                .map_or(f64::INFINITY, |(_, distance, _)| distance);
+        }
         let mut dist: HashMap<StationRef, f64> = HashMap::new();
         let mut heap = BinaryHeap::new();
         dist.insert(station_a, 0.0);
@@ -184,6 +194,92 @@ impl Project {
             .sum()
     }
 
+    fn graph_shortest_path<F>(
+        &self,
+        start: StationRef,
+        is_target: F,
+        merges: &HashMap<StationRef, Vec<StationRef>>,
+        closures: Option<&HashMap<StationRef, Vec<StationRef>>>,
+    ) -> Option<(StationRef, f64, HashMap<StationRef, (StationRef, PathEdge)>)>
+    where
+        F: Fn(StationRef) -> bool,
+    {
+        if !self.station_exists(start) {
+            return None;
+        }
+        let mut edges: HashMap<StationRef, Vec<(StationRef, f64, PathEdge)>> = HashMap::new();
+        for section in &self.sections {
+            for (index, shot) in section.shots.iter().enumerate() {
+                let from = Self::shot_start_ref(section.id, index);
+                let to = StationRef::new(section.id, index as u32 + 1);
+                edges.entry(from).or_default().push((
+                    to,
+                    shot.length.max(0.0),
+                    PathEdge::Shot {
+                        section_id: section.id,
+                        shot_index: index,
+                        forward: true,
+                    },
+                ));
+                edges.entry(to).or_default().push((
+                    from,
+                    shot.length.max(0.0),
+                    PathEdge::Shot {
+                        section_id: section.id,
+                        shot_index: index,
+                        forward: false,
+                    },
+                ));
+            }
+        }
+        for adjacency in std::iter::once(merges).chain(closures) {
+            for (&from, neighbors) in adjacency {
+                for &to in neighbors {
+                    edges
+                        .entry(from)
+                        .or_default()
+                        .push((to, 0.0, PathEdge::Merge));
+                }
+            }
+        }
+        let mut distances = HashMap::new();
+        let mut previous = HashMap::new();
+        let mut queue = BinaryHeap::new();
+        distances.insert(start, 0.0);
+        queue.push(HeapItem {
+            node: start,
+            cost: 0.0,
+        });
+        while let Some(HeapItem { node, cost }) = queue.pop() {
+            if distances
+                .get(&node)
+                .is_some_and(|known| cost > *known + 1e-9)
+            {
+                continue;
+            }
+            if is_target(node) {
+                return Some((node, cost, previous));
+            }
+            if let Some(neighbors) = edges.get(&node) {
+                for &(next, length, edge) in neighbors {
+                    let distance = cost + length;
+                    if distances
+                        .get(&next)
+                        .is_none_or(|known| distance < *known - 1e-9)
+                    {
+                        distances.insert(next, distance);
+                        previous.insert(next, (node, edge));
+                        queue.push(HeapItem {
+                            node: next,
+                            cost: distance,
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub(crate) fn build_section_lookup(&self) -> HashMap<SectionId, &Section> {
         self.sections.iter().map(|s| (s.id, s)).collect()
     }
@@ -207,6 +303,10 @@ impl Project {
                 adjacency.entry(b).or_default().push(a);
             }
         }
+        for (a, b) in self.origin_station_links() {
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
+        }
         adjacency
     }
 
@@ -221,6 +321,11 @@ impl Project {
         let section_lookup = self.build_section_lookup();
         let merge_adj = self.build_merge_adjacency(&section_lookup);
 
+        if self.shot_graph.explicit {
+            return self
+                .graph_shortest_path(start, is_target, &merge_adj, None)
+                .map(|(station, _, previous)| (station, previous));
+        }
         // Validate start station exists
         let start_section = section_lookup.get(&start.section_id)?;
         if start.station_index as usize > start_section.shots.len() {
@@ -387,8 +492,7 @@ impl Project {
         let mut rank: HashMap<StationRef, usize> = HashMap::new();
 
         for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+            for sr in self.section_station_refs(section.id) {
                 parent.insert(sr, sr);
                 rank.insert(sr, 0);
             }
@@ -440,6 +544,9 @@ impl Project {
             }
         }
 
+        for (a, b) in self.origin_station_links() {
+            union(&mut parent, &mut rank, a, b);
+        }
         for merge in &self.station_merges {
             if let (Some(a), Some(b)) = (
                 self.resolve_key(&merge.station_a),
@@ -463,8 +570,7 @@ impl Project {
 
         let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
         for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+            for sr in self.section_station_refs(section.id) {
                 let root = find(&mut parent, sr);
                 groups.entry(root).or_default().push(sr);
             }
@@ -478,8 +584,7 @@ impl Project {
         let mut rank: HashMap<StationRef, usize> = HashMap::new();
 
         for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+            for sr in self.section_station_refs(section.id) {
                 parent.insert(sr, sr);
                 rank.insert(sr, 0);
             }
@@ -531,6 +636,9 @@ impl Project {
             }
         }
 
+        for (a, b) in self.origin_station_links() {
+            union(&mut parent, &mut rank, a, b);
+        }
         for merge in &self.station_merges {
             if let (Some(a), Some(b)) = (
                 self.resolve_key(&merge.station_a),
@@ -542,8 +650,7 @@ impl Project {
 
         let mut groups: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
         for section in &self.sections {
-            for idx in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, idx as u32);
+            for sr in self.section_station_refs(section.id) {
                 let root = find(&mut parent, sr);
                 groups.entry(root).or_default().push(sr);
             }
@@ -639,13 +746,23 @@ impl Project {
         // Shots (permanent and jump/reference).
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                let from = StationRef::new(section.id, i as u32);
+                let from = if self.shot_graph.explicit {
+                    Self::shot_start_ref(section.id, i)
+                } else {
+                    StationRef::new(section.id, i as u32)
+                };
                 let to = StationRef::new(section.id, (i + 1) as u32);
                 if let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) {
                     let w = shot_weight(shot, fi, ti);
                     adj[fi].push((ti, w));
                     adj[ti].push((fi, w));
                 }
+            }
+        }
+        for (from, to) in self.origin_station_links() {
+            if let (Some(&a), Some(&b)) = (station_index.get(&from), station_index.get(&to)) {
+                adj[a].push((b, 0.0));
+                adj[b].push((a, 0.0));
             }
         }
         // Station merges: zero-cost (same physical point).

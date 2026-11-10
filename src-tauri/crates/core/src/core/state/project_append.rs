@@ -49,6 +49,7 @@ pub(super) fn append_project(
     let mut section_id_map: HashMap<SectionId, SectionId> = HashMap::new();
     let mut new_section_ids: Vec<SectionId> = Vec::with_capacity(source.sections.len());
 
+    let mut number_map = HashMap::new();
     for section in &source.sections {
         let old_section_id = section.id;
         let new_section_id = target.next_section_id;
@@ -68,7 +69,12 @@ pub(super) fn append_project(
         // consumer that needs document-wide uniqueness - the SpeleoDB
         // sidecar - already drops repeats itself
         // (`export::tml::harden_for_speleodb`).
-        target.add_section(section.to_section_data());
+        let mut data = section.to_section_data();
+        for shot in &mut data.shots { shot.from_id = None; }
+        let copied = target.add_section(data);
+        for (old, new) in section.shots.iter().zip(&copied.shots) {
+            if let (Some(old), Some(new)) = (old.number, new.number) { number_map.insert(old, new); }
+        }
 
         // #438: `SectionData` cannot carry the north reference, so the
         // copy would land on the target's default - reverting a
@@ -102,6 +108,7 @@ pub(super) fn append_project(
         new_section_ids.push(new_section_id);
     }
 
+    copy_shot_graph(target, source, &section_id_map, &number_map);
     copy_offsets_and_comments(target, source, &section_id_map);
     copy_zero_datums(target, source, &section_id_map)?;
     copy_merges_and_closures(target, source, &section_id_map);
@@ -113,6 +120,27 @@ pub(super) fn append_project(
         new_section_ids,
         elevation_conflict,
     })
+}
+
+/// Preserve explicit origins while allocating fresh project-wide shot numbers.
+fn copy_shot_graph(target: &mut Project, source: &Project, sections: &HashMap<SectionId, SectionId>, numbers: &HashMap<u32, u32>) {
+    if !source.shot_graph.explicit { return; }
+    target.shot_graph.explicit = true;
+    for original in &source.sections {
+        if let Some(section) = sections.get(&original.id).and_then(|id| target.get_section_mut(*id)) {
+            for (old, new) in original.shots.iter().zip(&mut section.shots) {
+                new.from_id = old.from_id.and_then(|number| numbers.get(&number).copied());
+            }
+        }
+    }
+    for (&old, &new) in numbers {
+        if let Some(position) = source.shot_graph.root_positions.get(&old) {
+            target.shot_graph.root_positions.insert(new, *position);
+        }
+        if let Some(reference) = source.shot_graph.azimuth_overrides.get(&old) {
+            target.shot_graph.azimuth_overrides.insert(new, *reference);
+        }
+    }
 }
 
 /// Section offsets, station offsets and station comments, remapped.

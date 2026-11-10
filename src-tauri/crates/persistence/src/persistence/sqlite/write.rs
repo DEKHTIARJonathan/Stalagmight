@@ -74,6 +74,7 @@ impl Database {
         )?;
 
         let mut shot_numbering = project.shot_numbering.clone();
+        let mut saved_numbers = std::collections::HashMap::new();
         // Save sections and shots
         for section in &project.sections {
             tx.execute(
@@ -127,6 +128,7 @@ impl Database {
                     shot_numbering.next = u64::from(number) + 1;
                     number
                 };
+                saved_numbers.insert((section.id, seq), number);
                 shot_numbering.next = shot_numbering.next.max(u64::from(number) + 1);
                 shot_numbering
                     .identities
@@ -358,6 +360,30 @@ impl Database {
             params![serde_json::to_string(&shot_numbering)?],
         )?;
 
+        let mut shot_graph = project.shot_graph.clone();
+        shot_graph.origins.clear();
+        for section in &project.sections {
+            let mut previous = None;
+            for (index, shot) in section.shots.iter().enumerate() {
+                if let Some(number) = saved_numbers.get(&(section.id, index)).copied() {
+                    let parent = if project.shot_graph.explicit {
+                        shot.from_id
+                    } else {
+                        previous
+                    };
+                    shot_graph.origins.insert(number, parent);
+                    previous = Some(number);
+                }
+            }
+        }
+        if !shot_graph.explicit {
+            shot_graph.root_positions.clear();
+        }
+        shot_graph.initialized = true;
+        tx.execute(
+            "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('shot_graph', ?1)",
+            params![serde_json::to_string(&shot_graph)?],
+        )?;
         let explorers: std::collections::BTreeMap<_, _> = project
             .sections
             .iter()

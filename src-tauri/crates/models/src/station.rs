@@ -51,6 +51,7 @@ impl std::fmt::Display for StationRef {
 pub enum StationAnchor {
     SectionStart,
     AfterShot(String),
+    BeforeShot(String),
     /// Positional fallback: a raw station index. Used ONLY transitionally - when
     /// loading a pre-anchor (v6) file's positional refs, and for test/construction
     /// convenience - then canonicalized to `SectionStart`/`AfterShot` by the load
@@ -145,6 +146,7 @@ impl std::fmt::Display for StationKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.anchor {
             StationAnchor::SectionStart => write!(f, "{}:start", self.section_id),
+            StationAnchor::BeforeShot(uuid) => write!(f, "{}:before:{uuid}", self.section_id),
             StationAnchor::AfterShot(uuid) => write!(f, "{}:after({uuid})", self.section_id),
             StationAnchor::Index(i) => write!(f, "{}:{i}", self.section_id),
         }

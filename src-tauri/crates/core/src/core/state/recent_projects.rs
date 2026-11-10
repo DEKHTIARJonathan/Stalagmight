@@ -12,7 +12,9 @@ impl AppState {
         self.project.lock().ok().and_then(|mut p| {
             p.as_mut().and_then(|project| {
                 project.ensure_shot_numbers().ok()?;
-                Some(project.clone())
+                let mut view = project.clone();
+                view.initialize_shot_graph().ok()?;
+                Some(view)
             })
         })
     }

@@ -1,3 +1,6 @@
+mod shot_graph;
+mod shot_graph_projection;
+pub use shot_graph::{ShotGraphState, SHOT_START_INDEX_FLAG};
 mod shot_numbers;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -237,6 +240,9 @@ pub struct Project {
     #[serde(default)]
     #[ts(skip)]
     pub shot_numbering: ShotNumbering,
+    #[serde(default)]
+    #[ts(skip)]
+    pub shot_graph: ShotGraphState,
     /// Project name (typically cave system name)
     pub name: String,
     /// Optional location description
@@ -553,6 +559,7 @@ fn station_key_order(key: &StationKey) -> (SectionId, u8, &str, u32) {
     match &key.anchor {
         StationAnchor::SectionStart => (key.section_id, 0, "", 0),
         StationAnchor::AfterShot(uuid) => (key.section_id, 1, uuid.as_str(), 0),
+        StationAnchor::BeforeShot(uuid) => (key.section_id, 3, uuid.as_str(), 0),
         StationAnchor::Index(index) => (key.section_id, 2, "", *index),
     }
 }
@@ -675,6 +682,10 @@ impl Project {
         let now = Utc::now();
         Self {
             shot_numbering: ShotNumbering::default(),
+            shot_graph: ShotGraphState {
+                initialized: true,
+                ..ShotGraphState::default()
+            },
             name,
             location,
             created_at: now,
@@ -749,13 +760,25 @@ impl Project {
         data: SectionData,
         numbers: &HashMap<String, u32>,
     ) -> &Section {
+        let explicit_origins: Vec<bool> = data
+            .shots
+            .iter()
+            .map(|shot| shot.from_id.is_some())
+            .collect();
         let mut section = Section::new(self.next_section_id, data);
-        for shot in &mut section.shots {
+        let mut previous = None;
+        for (shot, explicit) in section.shots.iter_mut().zip(explicit_origins) {
             shot.number = shot
                 .uuid
                 .as_ref()
                 .and_then(|uuid| numbers.get(uuid).copied())
                 .or_else(|| self.allocate_shot_number().ok());
+            if !explicit || (!numbers.is_empty() && !self.shot_graph.explicit) {
+                shot.from_id = previous;
+            } else if shot.from_id != previous {
+                self.shot_graph.explicit = true;
+            }
+            previous = shot.number;
         }
         self.next_section_id += 1;
         let new_idx = self.sections.len();
@@ -1405,6 +1428,13 @@ impl Project {
                     .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
                 (pos + 1) as u32
             }
+            StationAnchor::BeforeShot(uuid) => {
+                let position = section
+                    .shots
+                    .iter()
+                    .position(|shot| shot.uuid.as_deref() == Some(uuid.as_str()))?;
+                return Some(Self::shot_start_ref(section.id, position));
+            }
             StationAnchor::Index(i) => {
                 if *i as usize > section.shots.len() {
                     return None;
@@ -1428,7 +1458,12 @@ impl Project {
     /// anchors to `SectionStart`; station `i` to `AfterShot(uuid of shot i-1)`.
     pub fn key_for_ref(&self, sr: StationRef) -> Option<StationKey> {
         let section = self.get_section(sr.section_id)?;
-        let anchor = if sr.station_index == 0 {
+        let anchor = if sr.station_index & SHOT_START_INDEX_FLAG != 0 {
+            let shot = section
+                .shots
+                .get((sr.station_index & !SHOT_START_INDEX_FLAG) as usize)?;
+            StationAnchor::BeforeShot(shot.uuid.clone()?)
+        } else if sr.station_index == 0 {
             StationAnchor::SectionStart
         } else {
             let shot = section.shots.get((sr.station_index - 1) as usize)?;

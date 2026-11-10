@@ -70,6 +70,33 @@ impl Project {
     /// which API asked. Sorting at this single shared site makes them bit-identical.
     /// Group MEMBERSHIP is untouched - this only fixes the order it is added in.
     fn compute_station_depth(&self, colocated: &[StationRef]) -> f64 {
+        if self.shot_graph.explicit {
+            let mut values = Vec::new();
+            for station in colocated {
+                let Some(section) = self.get_section(station.section_id) else {
+                    continue;
+                };
+                if station.station_index == 0 {
+                    if let Some(shot) = section.shots.first() {
+                        values.push(shot.depth_in);
+                    }
+                } else if station.station_index & super::SHOT_START_INDEX_FLAG != 0 {
+                    if let Some(shot) = section
+                        .shots
+                        .get((station.station_index & !super::SHOT_START_INDEX_FLAG) as usize)
+                    {
+                        values.push(shot.depth_in);
+                    }
+                } else if let Some(shot) = section.shots.get(station.station_index as usize - 1) {
+                    values.push(shot.depth_out);
+                }
+            }
+            return if values.is_empty() {
+                0.0
+            } else {
+                values.iter().sum::<f64>() / values.len() as f64
+            };
+        }
         // A one-station group (every unmerged station, i.e. nearly all of them on a big
         // project) has no ordering question, so it keeps the allocation-free path: this
         // runs once per group per full coordinate rebuild.
@@ -113,6 +140,11 @@ impl Project {
 
     /// Compute raw station coordinates for a single station (without global zero datum offset)
     pub fn compute_station_raw_coords(&self, station_ref: StationRef) -> Option<Coordinates> {
+        if self.shot_graph.explicit {
+            return self.compute_station_positions().into_iter().find_map(
+                |(reference, coordinates)| (reference == station_ref).then_some(coordinates),
+            );
+        }
         let section = self.get_section(station_ref.section_id)?;
 
         // Get section offset
@@ -160,6 +192,12 @@ impl Project {
     /// avoids an O(group × merges) traversal per call - the dominant cost when
     /// merging the thousands of stations of a large import.
     pub(crate) fn compute_station_raw_xy(&self, station_ref: StationRef) -> Option<(f64, f64)> {
+        if self.shot_graph.explicit {
+            return self
+                .shot_graph_positions()
+                .get(&station_ref)
+                .map(|coordinates| (coordinates.x, coordinates.y));
+        }
         let section = self.get_section(station_ref.section_id)?;
         let (offset_x, offset_y) = self
             .section_offsets
@@ -198,6 +236,13 @@ impl Project {
         &self,
         component: &HashSet<SectionId>,
     ) -> HashMap<StationRef, Coordinates> {
+        if self.shot_graph.explicit {
+            return self
+                .compute_station_positions()
+                .into_iter()
+                .filter(|(reference, _)| component.contains(&reference.section_id))
+                .collect();
+        }
         let station_list: Vec<StationRef> = self
             .sections
             .iter()
@@ -516,6 +561,15 @@ impl Project {
         &self,
         config: &ClosureAdjustmentConfig,
     ) -> Vec<Station> {
+        if self.shot_graph.explicit {
+            if let Ok(projection) = self.shot_graph_projection() {
+                let stations = projection
+                    .project
+                    .compute_adjusted_station_coordinates(config);
+                return projection.map_stations(stations);
+            }
+            return self.compute_station_coordinates();
+        }
         // Fast path: nothing to adjust → adjusted == measured (skip the clone).
         if !self
             .loop_closures
@@ -553,6 +607,9 @@ impl Project {
         self,
         config: &ClosureAdjustmentConfig,
     ) -> Vec<Station> {
+        if self.shot_graph.explicit {
+            return self.compute_adjusted_station_coordinates(config);
+        }
         let anchors = self.plan_adjustment_anchors();
         let mut working = self;
         for anchor in anchors {
@@ -602,6 +659,23 @@ impl Project {
         &self,
         mut on_progress: Option<&mut dyn FnMut(u32, u32)>,
     ) -> Vec<(StationRef, Coordinates)> {
+        if self.shot_graph.explicit {
+            let mut positions = self.shot_graph_positions();
+            for group in self.build_colocated_groups().values() {
+                let depth = self.compute_station_depth(group);
+                for reference in group {
+                    if let Some(coordinates) = positions.get_mut(reference) {
+                        coordinates.z = depth;
+                    }
+                }
+            }
+            let mut ordered: Vec<_> = positions.into_iter().collect();
+            ordered.sort_by_key(|(reference, _)| (reference.section_id, reference.station_index));
+            if let Some(callback) = on_progress.as_mut() {
+                callback(ordered.len() as u32, ordered.len() as u32);
+            }
+            return ordered;
+        }
         // Calculate total stations first for progress reporting
         let total_stations: u32 = self.sections.iter().map(|s| s.shots.len() as u32 + 1).sum();
 
@@ -715,13 +789,17 @@ impl Project {
         let mut station_to_group: HashMap<StationRef, usize> = HashMap::new();
         let mut groups: Vec<VecDeque<StationRef>> = Vec::new();
 
-        for merge in &self.station_merges {
-            let (Some(sa), Some(sb)) = (
-                self.resolve_key(&merge.station_a),
-                self.resolve_key(&merge.station_b),
-            ) else {
-                continue;
-            };
+        let links = self
+            .station_merges
+            .iter()
+            .filter_map(|merge| {
+                Some((
+                    self.resolve_key(&merge.station_a)?,
+                    self.resolve_key(&merge.station_b)?,
+                ))
+            })
+            .chain(self.origin_station_links());
+        for (sa, sb) in links {
             let group_a = station_to_group.get(&sa).copied();
             let group_b = station_to_group.get(&sb).copied();
 

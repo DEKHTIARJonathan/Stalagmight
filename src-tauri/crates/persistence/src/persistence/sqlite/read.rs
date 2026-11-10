@@ -455,6 +455,7 @@ impl Database {
                         section_id,
                         Shot {
                             number: None,
+                            from_id: None,
                             // Saturating, like `models::shot_display_position`:
                             // the section id comes off disk, and a file naming
                             // a section id >= u32::MAX / FEATURE_ID_STRIDE
@@ -726,8 +727,22 @@ impl Database {
             .map(|json| serde_json::from_str(&json))
             .transpose()?
             .unwrap_or_default();
+        let graph_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'shot_graph'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let shot_graph = graph_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?
+            .unwrap_or_default();
         let mut project = Project {
             shot_numbering,
+            shot_graph,
             name,
             location,
             created_at,
@@ -774,6 +789,9 @@ impl Database {
             }
         }
         project.ensure_shot_numbers().map_err(anyhow::Error::msg)?;
+        project
+            .restore_saved_shot_graph()
+            .map_err(anyhow::Error::msg)?;
         Ok(project)
     }
 

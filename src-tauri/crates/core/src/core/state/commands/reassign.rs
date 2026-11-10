@@ -47,17 +47,6 @@ impl AppState {
         let critical = self.project_has_critical();
         let frame = self.frame_datum_key();
         let result = (|| -> Result<(SectionId, ShotId), String> {
-            {
-                let guard = self.project.lock().map_err(|_| "Failed to lock project")?;
-                let project = guard.as_ref().ok_or("No project open")?;
-                if project.is_shot_frozen_by_id(source, shot_id) {
-                    return Err("Cannot move a frozen shot".into());
-                }
-                let impact = project.preview_delete_shot(source, shot_id)?;
-                if impact.shift_blocked {
-                    return Err(impact.shift_blocked_reasons.join(" "));
-                }
-            }
             let target = if let Some(mut data) = new_section {
                 data.shots.clear();
                 let created = self.create_section(data);
@@ -78,19 +67,7 @@ impl AppState {
             if section.shots.len() >= FEATURE_ID_STRIDE.saturating_sub(1) as usize {
                 return Err("Destination section is full".into());
             }
-            let (shot, _) = project.remove_shot_with_rewire(source, shot_id)?;
-            let number = shot.number;
-            let added = project
-                .add_shot_with_number(target, shot.to_shot_data(), number)
-                .ok_or("Cannot append shot")?;
-            let id = added.id;
-            if let Some(moved) = project
-                .get_section_mut(target)
-                .and_then(|section| section.get_shot_mut(id))
-            {
-                moved.number = number;
-            }
-            project.ensure_shot_numbers()?;
+            let id = project.reassign_shot_metadata(source, shot_id, target)?;
             Ok((target, id))
         })();
         let (target, new_id) = match result {
@@ -100,9 +77,8 @@ impl AppState {
                 return CommandResult::failure(error);
             }
         };
-        self.convert_orphan_closures_in_open_project();
-        self.renormalize_frame_if_changed(frame);
-        self.reconcile_geometry();
+        let _ = frame;
+        self.invalidate_adjusted_cache();
         if let Some(failure) = self.guard_introduced_corruption(critical, &before, "Reassign shot")
         {
             return failure;

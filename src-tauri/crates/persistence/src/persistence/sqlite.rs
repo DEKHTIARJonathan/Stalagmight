@@ -95,7 +95,7 @@ use std::path::Path;
 ///
 /// Public so readers outside the app (the `stalx-reader` crate) can refuse a
 /// file written by a newer schema instead of misreading it.
-pub const SCHEMA_VERSION: i32 = 18;
+pub const SCHEMA_VERSION: i32 = 19;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

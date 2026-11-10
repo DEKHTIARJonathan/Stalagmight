@@ -42,6 +42,16 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        if let Some(Some(parent)) = data.from_id {
+            if !project
+                .sections
+                .iter()
+                .flat_map(|section| &section.shots)
+                .any(|shot| shot.number == Some(parent))
+            {
+                return CommandResult::failure(format!("Origin shot {parent} does not exist"));
+            }
+        }
         let max_shots = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
 
         // Compute the real shot index for validation messages

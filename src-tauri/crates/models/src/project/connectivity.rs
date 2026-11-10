@@ -59,6 +59,10 @@ impl Project {
                 adjacency.entry(sb).or_default().push(sa);
             }
         }
+        for (a, b) in self.origin_station_links() {
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
+        }
         adjacency
     }
 

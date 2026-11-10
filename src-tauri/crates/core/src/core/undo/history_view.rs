@@ -187,6 +187,13 @@ impl SnapshotPreview {
                     .position(|s| s.uuid.as_deref() == Some(uuid.as_str()))?;
                 u32::try_from(pos).ok()?.checked_add(1)?
             }
+            crate::models::StationAnchor::BeforeShot(uuid) => {
+                let position = section
+                    .shots
+                    .iter()
+                    .position(|shot| shot.uuid.as_deref() == Some(uuid.as_str()))?;
+                crate::models::Project::shot_start_ref(key.section_id, position).station_index
+            }
             crate::models::StationAnchor::Index(i) => {
                 if *i as usize > section.shots.len() {
                     return None;

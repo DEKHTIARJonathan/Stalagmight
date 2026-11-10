@@ -185,6 +185,7 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
     let frozen_shots = project.compute_frozen_shots();
 
     Some(ProjectState {
+        shot_start_refs: Some(project.shot_start_refs()),
         project,
         stations,
         stats,
@@ -348,6 +349,8 @@ pub(crate) fn merge_projects_impl(
 /// Combined project state for frontend
 #[derive(serde::Serialize, TS)]
 pub struct ProjectState {
+    #[ts(optional)]
+    pub shot_start_refs: Option<Vec<StationRef>>,
     /// Serialized through [`ProjectIpc`] so cross-references reach the frontend
     /// in positional wire form (the ts-rs `Project` shape), not the internal
     /// `StationKey` shape that derived serde would emit. ts-rs still reads the

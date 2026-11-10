@@ -225,7 +225,7 @@ impl Project {
                 None => false,
                 Some((count, uuids)) => match &key.anchor {
                     StationAnchor::SectionStart => true,
-                    StationAnchor::AfterShot(u) => uuids.contains(u),
+                    StationAnchor::AfterShot(u) | StationAnchor::BeforeShot(u) => uuids.contains(u),
                     StationAnchor::Index(i) => *i <= *count,
                 },
             }

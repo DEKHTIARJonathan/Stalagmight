@@ -665,7 +665,11 @@ impl AppState {
             return Err(CommandResult::failure("No project open".to_string()));
         };
         p.ensure_shot_numbers().map_err(CommandResult::failure)?;
-        Self::serialize_project_snapshot(p)
+        let mut snapshot = p.clone();
+        snapshot
+            .initialize_shot_graph()
+            .map_err(CommandResult::failure)?;
+        Self::serialize_project_snapshot(&snapshot)
             .map_err(|e| CommandResult::failure(format!("Failed to serialize project: {e}")))
     }
 
@@ -810,7 +814,7 @@ impl AppState {
                         .identities
                         .extend(current.shot_numbering.identities.clone());
                 }
-                if restored.ensure_shot_numbers().is_err() {
+                if restored.initialize_shot_graph().is_err() {
                     return false;
                 }
                 restored.file_path = current_file_path;

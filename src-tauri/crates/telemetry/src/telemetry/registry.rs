@@ -187,6 +187,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.update_panel_sizes",
     "command.update_section",
     "command.update_shot",
+    "command.set_shot_from_id",
     // ── Action: tools (93-104) ──
     "action.tool.comment",
     "action.tool.delete",

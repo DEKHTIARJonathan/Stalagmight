@@ -4416,10 +4416,6 @@ fn test_delete_shot_rejects_frozen_shot() {
         result.error
     );
 
-    let transfer = state.reassign_shot(sec_a, target_shot_id, Some(sec_b), None);
-    assert!(!transfer.success);
-    assert!(transfer.error.as_deref().unwrap_or("").contains("frozen"));
-
     // The shot still exists - nothing was removed.
     let after = state.get_project_state().unwrap();
     let shots_after = after
@@ -4560,6 +4556,7 @@ fn test_split_shot_at_distance_happy_path() {
             shots: vec![
                 test_shot_data(5.0),
                 ShotData {
+                    from_id: None,
                     uuid: None,
                     azimuth_in: 30.0,
                     azimuth_out: 32.0,

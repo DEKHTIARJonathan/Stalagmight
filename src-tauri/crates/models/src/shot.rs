@@ -229,6 +229,10 @@ pub struct Shot {
     #[serde(default)]
     #[ts(optional)]
     pub number: Option<u32>,
+    /// Permanent number of the shot whose endpoint this shot starts from.
+    #[serde(default)]
+    #[ts(optional, type = "number | null")]
+    pub from_id: Option<u32>,
     /// Persistent v4 UUID minted at shot creation, stable across saves
     /// and reloads.  Emitted into the TML on export so Ariane 26+ can
     /// round-trip shot identity without depending on the lossy
@@ -297,6 +301,13 @@ pub struct ShotData {
     #[serde(default)]
     #[ts(optional)]
     pub uuid: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub from_id: Option<Option<u32>>,
     pub azimuth_in: f64,
     pub azimuth_out: f64,
     pub length: f64,
@@ -633,6 +644,7 @@ impl Shot {
         Self {
             id,
             number: None,
+            from_id: data.from_id.flatten(),
             uuid: data.uuid.or(uuid),
             azimuth_in: data.azimuth_in,
             azimuth_out: data.azimuth_out,
@@ -756,6 +768,7 @@ impl Shot {
             // re-minting - see [`ShotData::uuid`] for the one path (clone /
             // duplicate) that must clear it instead.
             uuid: self.uuid.clone(),
+            from_id: Some(self.from_id),
             azimuth_in: self.azimuth_in,
             azimuth_out: self.azimuth_out,
             length: self.length,
@@ -829,6 +842,7 @@ impl ShotData {
 impl From<Shot> for ShotData {
     fn from(shot: Shot) -> Self {
         ShotData {
+            from_id: Some(shot.from_id),
             uuid: shot.uuid,
             azimuth_in: shot.azimuth_in,
             azimuth_out: shot.azimuth_out,
@@ -856,6 +870,7 @@ mod tests {
 
     fn base_shot_data() -> ShotData {
         ShotData {
+            from_id: None,
             uuid: None,
             azimuth_in: 10.0,
             azimuth_out: 20.0,

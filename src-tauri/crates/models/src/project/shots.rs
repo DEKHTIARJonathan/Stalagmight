@@ -157,13 +157,23 @@ impl Project {
             return None;
         }
         let number = number.or_else(|| self.allocate_shot_number().ok());
+        let explicit_origin = data.from_id.is_some();
         let section = self.get_section_mut(section_id)?;
+        let previous = section.shots.last().and_then(|shot| shot.number);
         if section.shots.len() >= Self::max_shots_per_section() {
             return None;
         }
         let shot = section.add_shot(data);
         let shot_id = shot.id;
-        section.get_shot_mut(shot_id)?.number = number;
+        let added = section.get_shot_mut(shot_id)?;
+        added.number = number;
+        if !explicit_origin {
+            added.from_id = previous;
+        }
+        let explicit_graph = explicit_origin && added.from_id != previous;
+        if explicit_graph {
+            self.shot_graph.explicit = true;
+        }
         self.ensure_shot_numbers().ok()?;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
@@ -536,6 +546,7 @@ impl Project {
         let t = distance / shot.length;
         let mid_depth = shot.depth_in + t * (shot.depth_out - shot.depth_in);
         let head_data = ShotData {
+            from_id: None,
             // The head child is a NEW shot; only the tail keeps the parent's
             // identity (see this method's doc comment - it is what makes every
             // existing `AfterShot` anchor keep resolving without a remap).

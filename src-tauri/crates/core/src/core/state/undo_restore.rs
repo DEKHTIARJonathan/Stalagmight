@@ -40,6 +40,14 @@ impl AppState {
     /// property. See `Project::remeasure_closure_alignment` for why a sweep that
     /// runs on the inverse at all is still a restore rather than a re-derivation.
     pub(super) fn reconcile_geometry(&self) {
+        if let Ok(mut guard) = self.project.lock() {
+            if let Some(project) = guard.as_mut().filter(|project| project.shot_graph.explicit) {
+                if let Err(error) = project.reconcile_shot_graph() {
+                    tracing::warn!(error, "Could not reconcile directed survey joins");
+                }
+                return;
+            }
+        }
         let mut guard = match self.project.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),

@@ -634,7 +634,13 @@ impl Project {
     pub fn station_exists(&self, station_ref: StationRef) -> bool {
         if let Some(section) = self.get_section(station_ref.section_id) {
             // Station index 0 is before first shot, subsequent indices are after each shot
-            station_ref.station_index as usize <= section.shots.len()
+            if station_ref.station_index & super::SHOT_START_INDEX_FLAG != 0 {
+                self.shot_graph.explicit
+                    && ((station_ref.station_index & !super::SHOT_START_INDEX_FLAG) as usize)
+                        < section.shots.len()
+            } else {
+                station_ref.station_index as usize <= section.shots.len()
+            }
         } else {
             false
         }

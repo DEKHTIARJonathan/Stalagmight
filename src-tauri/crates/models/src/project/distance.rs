@@ -310,7 +310,11 @@ impl Project {
         let mut shot_edge: HashMap<(usize, usize), PathShot> = HashMap::new();
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                let from = StationRef::new(section.id, i as u32);
+                let from = if self.shot_graph.explicit {
+                    Self::shot_start_ref(section.id, i)
+                } else {
+                    StationRef::new(section.id, i as u32)
+                };
                 let to = StationRef::new(section.id, (i + 1) as u32);
                 if let (Some(&fi), Some(&ti)) = (idx.get(&from), idx.get(&to)) {
                     let ps = PathShot {
@@ -678,8 +682,7 @@ impl Project {
         let mut station_to_idx: HashMap<StationRef, usize> = HashMap::new();
         let mut idx_to_station: Vec<StationRef> = Vec::new();
         for section in &self.sections {
-            for i in 0..=section.shots.len() {
-                let sr = StationRef::new(section.id, i as u32);
+            for sr in self.section_station_refs(section.id) {
                 let idx = idx_to_station.len();
                 station_to_idx.insert(sr, idx);
                 idx_to_station.push(sr);
@@ -697,7 +700,11 @@ impl Project {
         // Add shot edges
         for section in &self.sections {
             for shot_index in 0..section.shots.len() {
-                let a = StationRef::new(section.id, shot_index as u32);
+                let a = if self.shot_graph.explicit {
+                    Self::shot_start_ref(section.id, shot_index)
+                } else {
+                    StationRef::new(section.id, shot_index as u32)
+                };
                 let b = StationRef::new(section.id, (shot_index + 1) as u32);
                 if let (Some(&ai), Some(&bi)) = (station_to_idx.get(&a), station_to_idx.get(&b)) {
                     adj[ai].push((bi, true, section.id, shot_index as u32));
@@ -818,7 +825,11 @@ impl Project {
         let mut frozen = Vec::new();
         for section in &self.sections {
             for shot_index in 0..section.shots.len() {
-                let a = StationRef::new(section.id, shot_index as u32);
+                let a = if self.shot_graph.explicit {
+                    Self::shot_start_ref(section.id, shot_index)
+                } else {
+                    StationRef::new(section.id, shot_index as u32)
+                };
                 let b = StationRef::new(section.id, (shot_index + 1) as u32);
                 let (Some(&ai), Some(&bi)) = (station_to_idx.get(&a), station_to_idx.get(&b))
                 else {

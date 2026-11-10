@@ -903,6 +903,7 @@ fn shot_to_shot_data(
         None => (azimuth, None),
     };
     ShotData {
+        from_id: None,
         // Compass files carry no shot identity; every shot gets a fresh mint.
         uuid: None,
         azimuth_in: azimuth,
