@@ -113,6 +113,11 @@ export function computeOverlapIds(
  * Compute the subset of overlap IDs that are "actionable" - shots up to
  * (but not past) the merge station.
  *
+ * This is the DMP wizard's TRIMMING rule: it deletes these shots from the
+ * not-yet-committed import, and deleting past the merge station would cut the
+ * section off. The orphan-placement dialog trims nothing, so it uses
+ * `computeOverlapPairs` instead (#681).
+ *
  * Front: shots 0..mergeImportStation-1
  * Back:  shots mergeImportStation..(importStationIndex-1)
  */
@@ -168,6 +173,28 @@ export function computeTargetShotIndex(
       ? (existingStationIndex + matchedShots - 1) - k
       : (existingStationIndex - matchedShots) + k;
   }
+}
+
+/** One repeated shot: the new section's copy and the existing shot it repeats. */
+export interface OverlapPair {
+  orphanShotIndex: number;
+  targetShotIndex: number;
+}
+
+/**
+ * Every repeated shot of a placement, paired with the existing shot it repeats,
+ * in new-section shot order (#681).
+ *
+ * Deliberately independent of the merge station: a repeated shot on the far side
+ * of the chosen station is still a duplicate, drawn over the existing one and
+ * counted twice in the survey length, so it needs a decision too.
+ */
+export function computeOverlapPairs(params: OverlapParams): OverlapPair[] {
+  return [...computeOverlapIds(params.importStationIndex, params.matchedShots)]
+    .map((orphanShotIndex) => ({
+      orphanShotIndex,
+      targetShotIndex: computeTargetShotIndex(orphanShotIndex, params),
+    }));
 }
 
 /**
