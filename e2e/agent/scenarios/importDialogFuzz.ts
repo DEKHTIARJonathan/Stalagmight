@@ -655,8 +655,9 @@ const TOAST_INCOMPLETE = 'dmp-wizard-incomplete';
  * (`.agent-artifacts/orphan-proof-20260811/`) raised it with two suggestions
  * queued - "Connect Orphaned Sections / Section 1 of 2", one suggested
  * connection with a merge-station picker and an overlap mode (since #681, a
- * table of repeated shots with a choice per shot), and four enabled buttons. Accepting joins the orphan to a newly imported section; skipping and
- * closing only move through the queue.
+ * table of repeated shots with a choice per shot), and four enabled buttons.
+ * Accepting joins the orphan to a newly imported section; skipping and closing
+ * only move through the queue.
  */
 const ORPHAN_ACCEPTS: ReadonlySet<string> = new Set(['orphan-accept', 'orphan-accept-all']);
 const ORPHAN_DECLINES: ReadonlySet<string> = new Set(['orphan-skip', 'orphan-close']);

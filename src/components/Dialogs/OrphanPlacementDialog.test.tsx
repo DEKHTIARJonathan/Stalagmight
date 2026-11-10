@@ -33,7 +33,7 @@ import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 const ok = async (): Promise<CommandResult> => ({ success: true } as CommandResult);
 
 /** A minimal, valid suggestion. `matchedShots: 0` skips the shot-rewrite branch
- *  (applyOverlapChoices returns early), keeping the test focused on the
+ *  (placeSuggestion returns early), keeping the test focused on the
  *  accept → persist → close wiring. */
 function makeSuggestion(over: Partial<OrphanPlacementSuggestion> = {}): OrphanPlacementSuggestion {
   return {
