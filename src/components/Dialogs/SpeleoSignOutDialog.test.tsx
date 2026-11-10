@@ -13,6 +13,7 @@ vi.mock('../../utils/ipc', () => ({
 import SpeleoSignOutDialog from './SpeleoSignOutDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
+import { useUIStore } from '../../store/uiStore';
 import { useSpeleoSignOut, type SignOutProject, type SignOutSurvey } from '../../utils/speleoSignOut';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 
@@ -224,6 +225,38 @@ describe('SpeleoSignOutDialog', () => {
     expect(closeProject).toHaveBeenCalledWith({ discardLocal: true });
     expect(released).toEqual(['a', 'x']);
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_discard_cached_copy', expect.anything(), expect.anything());
+  });
+
+  it.each([
+    ['speleodb_discard_failed', 'Synthetic: the copy is still there, and the project stays reserved for you on SpeleoDB.'],
+    ['delete_project_lock_release_failed', 'Synthetic: the SpeleoDB lock could not be handed back.'],
+  ])('a discarding close that leaves the lock held (%s) says so, then signs out', async (code, message) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast: showToast as never });
+    closeProject.mockImplementation(async () => {
+      useProjectStore.setState({ project: null });
+      return { ...ok, warnings: [{ code, message, severity: 'warning' }] };
+    });
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] });
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-discard'));
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-discard-confirm'));
+    expect(await answer).toBe(true);
+    // The same surface and words as the exit prompt: the backend's warning, as a toast.
+    expect(showToast).toHaveBeenCalledOnce();
+    expect(showToast).toHaveBeenCalledWith(message, 'speleodb-lock', 'warning');
+    expect(closeProject).toHaveBeenCalledWith({ discardLocal: true });
+    // The sign-out carries on: the other locks are handed back as before.
+    expect(released).toEqual(['a']);
+  });
+
+  it('a clean discarding close shows no warning', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast: showToast as never });
+    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-discard'));
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-discard-confirm'));
+    expect(await answer).toBe(true);
+    expect(showToast).not.toHaveBeenCalled();
   });
 
   it('Back from the discard step discards nothing', async () => {

@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { selectPushFailure, useSpeleoStore } from '../../store/speleoStore';
+import { useUIStore } from '../../store/uiStore';
 import { useScreenOccupant } from '../../hooks/useScreenOccupant';
 import { getErrorMessage } from '../../utils/ipc';
 import { closeDiscardingLocal } from '../../utils/speleoExit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
+import { TOAST_KEYS } from '../../utils/toastKeys';
 import {
   releaseSignOutLocks,
   signOutHasWork,
@@ -160,13 +162,13 @@ function SignOutPrompt({ kind, initial, settle }: {
     if (!open) return;
     setDoing('discard');
     setError(null);
-    let outcome: { ok: boolean; error?: string | undefined };
+    let outcome: { ok: boolean; error?: string | undefined; warning?: string | undefined };
     if (!openCurrent()) {
       outcome = { ok: false };
     } else {
       try {
         const closed = await closeDiscardingLocal();
-        outcome = closed.ok ? { ok: true } : { ok: false, error: closed.error };
+        outcome = closed.ok ? { ok: true, warning: closed.warning } : { ok: false, error: closed.error };
       } catch (e) {
         outcome = { ok: false, error: getErrorMessage(e) };
       }
@@ -175,6 +177,13 @@ function SignOutPrompt({ kind, initial, settle }: {
       setDoing(null);
       setError(outcome.error || t('speleoExitPrompt.signOut.discardFailed', { name: open.summary.name }));
       return;
+    }
+    // A close that happened but left something behind (the lock could not be
+    // handed back, or the copy could not be removed and stays reserved) is said,
+    // as the exit prompt says it, before the sign-out goes on: a lock left held
+    // is never silent.
+    if (outcome.warning) {
+      useUIStore.getState().showToast(outcome.warning, TOAST_KEYS.SPELEODB_LOCK, 'warning');
     }
     void useProjectStore.getState().loadRecentProjects();
     await release(otherLocks, 'discard');

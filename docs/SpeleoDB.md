@@ -661,7 +661,10 @@ on, and every button is in the one footer row, Cancel first and the primary last
   and runs the normal upload, which releases. Discard goes through a "lost forever"
   step (Back / Discard and disconnect) that lists what is lost (unsaved changes,
   changes saved on this computer but not uploaded) and applies to the open project
-  only. Upload is offered only while we hold the open project's lock.
+  only. A discarding close that leaves something behind (the lock could not be
+  handed back, or the copy could not be removed and stays reserved) shows its
+  warning as a toast, as the exit prompt does, and the sign-out goes on. Upload is
+  offered only while we hold the open project's lock.
 - Other cached copies with un-uploaded work are always kept on this computer: the
   body names them (names only, no buttons) and says they can be opened and uploaded
   after connecting again. Their edits and un-uploaded flag survive, and a lock held
