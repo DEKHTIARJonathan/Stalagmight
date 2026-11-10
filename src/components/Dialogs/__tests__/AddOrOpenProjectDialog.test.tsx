@@ -3,7 +3,7 @@
  * in-project Import door.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 
 const closeDialog = vi.fn();
 
@@ -15,8 +15,12 @@ vi.mock('react-i18next', () => ({
 
 const dialogData: { path?: string; fileName?: string } = {};
 
+let activeDialog: string | null = 'add-or-open-project';
+
 vi.mock('../../../store/uiStore', () => ({
-  useUIStore: (sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }),
+  useUIStore: Object.assign((sel: (s: unknown) => unknown) => sel({ closeDialog, dialogData }), {
+    getState: () => ({ activeDialog }),
+  }),
 }));
 
 vi.mock('../../../store/projectStore', () => ({
@@ -37,8 +41,12 @@ vi.mock('../../../utils/telemetry', () => ({
   clearProjectActionSource: vi.fn(),
 }));
 
+let wrapperOnClose: () => void = () => {};
 vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogWrapper: ({ children, onClose }: { children: React.ReactNode; onClose: () => void }) => {
+    wrapperOnClose = onClose;
+    return <div>{children}</div>;
+  },
 }));
 
 import { routeOpenedFile } from '../../../utils/openOrImport';
@@ -50,6 +58,7 @@ describe('AddOrOpenProjectDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     blocked = false;
+    activeDialog = 'add-or-open-project';
     dialogData.path = '/cave/other.stalx';
     dialogData.fileName = 'other.stalx';
   });
@@ -74,13 +83,62 @@ describe('AddOrOpenProjectDialog', () => {
     expect(trackDialogComplete).toHaveBeenCalledWith('add-or-open-project');
   });
 
-  it('"Add to" appends the file and never opens it as a project', () => {
+  it('"Add to" appends the file and never opens it as a project', async () => {
+    vi.mocked(runAddProjectFile).mockResolvedValue({ success: true, warnings: [], error: null, section_ids: [] });
     render(<AddOrOpenProjectDialog />);
-    fireEvent.click(screen.getByTestId('add-or-open-project-add'));
-    expect(closeDialog).toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByTestId('add-or-open-project-add')));
     expect(runAddProjectFile).toHaveBeenCalledWith('/cave/other.stalx');
     expect(routeOpenedFile).not.toHaveBeenCalled();
-    expect(trackDialogComplete).toHaveBeenCalledWith('add-or-open-project');
+  });
+
+  /**
+   * The add copies and loads a whole project. While it runs, this dialog must
+   * keep the slot: an active dialog is what makes the router, Ctrl+O and the
+   * launch channel refuse another open. On success the add's own tail closes or
+   * replaces the dialog (and records its completion, once), so the dialog
+   * neither closes itself nor marks itself complete.
+   *
+   * Injection: restore `closeDialog()` before `runAddProjectFile` in handleAdd
+   * and the slot empties while the add is still in flight.
+   */
+  it('keeps the slot busy until the add resolves, then leaves the ending to the tail', async () => {
+    let resolveAdd: (r: unknown) => void = () => {};
+    vi.mocked(runAddProjectFile).mockReturnValue(new Promise((r) => { resolveAdd = r; }) as never);
+    render(<AddOrOpenProjectDialog />);
+    await act(async () => fireEvent.click(screen.getByTestId('add-or-open-project-add')));
+
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect((screen.getByTestId('add-or-open-project-add') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('add-or-open-project-open') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('add-or-open-project-cancel') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('add-or-open-project-add').textContent).toBe('dialogs.addOrOpenProject.adding');
+    wrapperOnClose(); // Escape / X / backdrop
+    expect(closeDialog).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('add-or-open-project-add'));
+    expect(runAddProjectFile).toHaveBeenCalledTimes(1);
+
+    // The tail finished the flow: orphan placement replaced this dialog.
+    activeDialog = 'orphan-placement';
+    await act(async () => resolveAdd({ success: true, warnings: [], error: null, section_ids: [7] }));
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect(trackDialogComplete).not.toHaveBeenCalled();
+  });
+
+  it('a failed add shows why inline and hands the choice back', async () => {
+    vi.mocked(runAddProjectFile).mockResolvedValue({ success: false, warnings: [], error: 'boom', section_ids: [] });
+    render(<AddOrOpenProjectDialog />);
+    await act(async () => fireEvent.click(screen.getByTestId('add-or-open-project-add')));
+    expect(screen.getByTestId('add-or-open-project-error').textContent).toBe('boom');
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect((screen.getByTestId('add-or-open-project-open') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('add-or-open-project-add') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('closes itself when the add landed but its project moved (the tail was dropped)', async () => {
+    vi.mocked(runAddProjectFile).mockResolvedValue({ success: true, warnings: [], error: null, section_ids: [] });
+    render(<AddOrOpenProjectDialog />);
+    await act(async () => fireEvent.click(screen.getByTestId('add-or-open-project-add')));
+    expect(closeDialog).toHaveBeenCalledTimes(1);
   });
 
   it('Add is disabled and inert while editing is blocked, but Open as project still works', () => {

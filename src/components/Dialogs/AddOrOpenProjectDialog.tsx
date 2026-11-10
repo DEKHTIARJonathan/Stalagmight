@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -16,6 +17,7 @@ import { runAddProjectFile } from '../../utils/addProjectFile';
  *
  * Add is a mutation, so it is unavailable while editing is blocked; Open as
  * project stays available because it replaces the project rather than editing it.
+ * Add keeps this dialog open and busy until it resolves; see `handleAdd`.
  */
 export default function AddOrOpenProjectDialog() {
   const { t } = useTranslation();
@@ -23,6 +25,8 @@ export default function AddOrOpenProjectDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const projectName = useProjectStore((s) => s.project?.name);
   const editingBlocked = useEditingBlocked();
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const path = dialogData.path as string | undefined;
   const fileName = dialogData.fileName as string | undefined;
@@ -39,17 +43,29 @@ export default function AddOrOpenProjectDialog() {
     void routeOpenedFile(path, 'Open Failed', { swapConfirmed: true });
   };
 
-  const handleAdd = () => {
-    if (isEditingBlockedNow()) return;
-    trackDialogComplete('add-or-open-project');
-    closeDialog();
-    void runAddProjectFile(path);
+  // Stay open, busy, until the add resolves (like LaunchOpenConfirmDialog): an
+  // active dialog is what makes the router, Ctrl+O and the launch channel refuse,
+  // and the add copies and loads a whole project. `runAddProjectFile` closes or
+  // replaces this dialog on success, so still being here means it did not land.
+  const handleAdd = async () => {
+    if (adding || isEditingBlockedNow()) return;
+    setAdding(true);
+    setAddError(null);
+    const result = await runAddProjectFile(path);
+    if (useUIStore.getState().activeDialog !== 'add-or-open-project') return;
+    if (result.success) {
+      // Its project moved while the add ran, so the tail was dropped.
+      closeDialog();
+      return;
+    }
+    setAdding(false);
+    setAddError(result.error ?? t('editGate.commandFailed'));
   };
 
   return (
     <DialogWrapper
       title={t('dialogs.addOrOpenProject.title')}
-      onClose={handleCancel}
+      onClose={adding ? () => {} : handleCancel}
       size="sm"
       data-testid="add-or-open-project-dialog"
     >
@@ -62,20 +78,27 @@ export default function AddOrOpenProjectDialog() {
             {t('dialogs.addOrOpenProject.blockedNotice')}
           </p>
         )}
+        {addError && (
+          <p className="text-sm text-error" role="alert" data-testid="add-or-open-project-error">
+            {addError}
+          </p>
+        )}
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={handleCancel} data-testid="add-or-open-project-cancel">
+          <Button onClick={handleCancel} disabled={adding} data-testid="add-or-open-project-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button onClick={handleOpen} data-testid="add-or-open-project-open">
+          <Button onClick={handleOpen} disabled={adding} data-testid="add-or-open-project-open">
             {t('dialogs.addOrOpenProject.openAsProject')}
           </Button>
           <Button
             variant="primary"
-            onClick={handleAdd}
-            disabled={editingBlocked}
+            onClick={() => void handleAdd()}
+            disabled={editingBlocked || adding}
             data-testid="add-or-open-project-add"
           >
-            {t('dialogs.addOrOpenProject.addTo', { projectName: projectName ?? '' })}
+            {adding
+              ? t('dialogs.addOrOpenProject.adding')
+              : t('dialogs.addOrOpenProject.addTo', { projectName: projectName ?? '' })}
           </Button>
         </div>
       </div>

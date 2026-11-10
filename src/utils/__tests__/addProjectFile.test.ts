@@ -1,7 +1,8 @@
 /**
  * #674: the post-add sequence reuses the existing import tail - dirty via
  * saveAfterImport, orphan placement keyed on `section_ids`, receipt via
- * finishImportWithoutOrphanSuggestions.
+ * finishImportWithoutOrphanSuggestions - and drops that tail when the project it
+ * was issued against is no longer the open one.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -9,8 +10,10 @@ const invokeIpc = vi.fn();
 vi.mock('../ipc', () => ({ invokeIpc: (...a: unknown[]) => invokeIpc(...a), getErrorMessage: (e: unknown) => String(e) }));
 
 const finish = vi.fn();
+const finalizeDeferred = vi.fn();
 vi.mock('../saveFeedback', () => ({
   finishImportWithoutOrphanSuggestions: (...a: unknown[]) => finish(...a),
+  finalizeDeferredSaveWarnings: (...a: unknown[]) => finalizeDeferred(...a),
 }));
 
 import { runAddProjectFile } from '../addProjectFile';
@@ -24,7 +27,8 @@ const receipt = { source_format: 'x', warnings: [], info: [] };
 beforeEach(() => {
   vi.clearAllMocks();
   saveAfterImport.mockResolvedValue(true);
-  useProjectStore.setState({ addProjectFile, saveAfterImport } as never);
+  finalizeDeferred.mockReturnValue(false);
+  useProjectStore.setState({ project: { created_at: 'cave-a' }, addProjectFile, saveAfterImport } as never);
   useUIStore.setState({ activeDialog: null, dialogData: {}, importContext: null });
 });
 
@@ -71,5 +75,57 @@ describe('runAddProjectFile', () => {
     invokeIpc.mockRejectedValue(new Error('boom'));
     await runAddProjectFile('/cave/a.stalx');
     expect(finish).toHaveBeenCalledTimes(1);
+  });
+
+  it('a transport rejection comes back as a failed result, context dropped', async () => {
+    addProjectFile.mockRejectedValue(new Error('ipc gone'));
+    const result = await runAddProjectFile('/cave/a.stalx');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('ipc gone');
+    expect(saveAfterImport).not.toHaveBeenCalled();
+    expect(useUIStore.getState().importContext).toBeNull();
+  });
+
+  it('stops after reporting a failed deferred save, like every other import route', async () => {
+    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt, warnings: [] });
+    finalizeDeferred.mockReturnValue(true);
+    await runAddProjectFile('/cave/a.stalx');
+    expect(finalizeDeferred).toHaveBeenCalledWith([], 'add-or-open-project', expect.anything(), receipt);
+    expect(saveAfterImport).not.toHaveBeenCalled();
+    expect(invokeIpc).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The add copies and loads a whole project, and its tail writes save state and
+   * raises orphan placement; none of it may land on a project opened meanwhile.
+   *
+   * Injection: drop the `stillOpen()` check after `addProjectFile` and
+   * `saveAfterImport` plus the orphan lookup run against the replacement.
+   */
+  it('drops the tail when the project changed while the add ran', async () => {
+    addProjectFile.mockImplementation(async () => {
+      useProjectStore.setState({ project: { created_at: 'cave-b' } } as never);
+      return { success: true, section_ids: [7], import_receipt: receipt };
+    });
+    await runAddProjectFile('/cave/a.stalx');
+    expect(saveAfterImport).not.toHaveBeenCalled();
+    expect(invokeIpc).not.toHaveBeenCalled();
+    expect(finish).not.toHaveBeenCalled();
+    expect(useUIStore.getState().importContext).toBeNull();
+  });
+
+  /** Injection: drop the `stillOpen()` check after the orphan lookup and the
+   *  placement dialog opens over the replacement project. */
+  it('drops orphan placement when the project changed during the lookup', async () => {
+    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt });
+    invokeIpc.mockImplementation(async () => {
+      useProjectStore.setState({ project: null } as never);
+      return [{ orphanSectionId: 7 }];
+    });
+    await runAddProjectFile('/cave/a.stalx');
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    expect(finish).not.toHaveBeenCalled();
+    expect(useUIStore.getState().importContext).toBeNull();
   });
 });
