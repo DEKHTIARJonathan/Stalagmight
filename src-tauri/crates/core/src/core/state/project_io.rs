@@ -591,7 +591,14 @@ impl AppState {
                 Some(db) => db.load_resolved_warnings_verbatim(),
                 None => Ok(Vec::new()),
             }
-        };
+        }
+        // ...plus the ignores an "Add .stalx" carried in for sections this file
+        // has never held (#674): THIS save is the first that can write them.
+        // They ride the same remap and section filter as every other row.
+        .map(|mut rows| {
+            rows.extend(self.pending_ignores());
+            rows
+        });
         let resolved_warnings: Vec<_> = match carried_ignores {
             Ok(rows) => {
                 // Drop rows whose section no longer exists. resolved_warnings has
@@ -1064,6 +1071,11 @@ impl AppState {
         // the project is persisted regardless of whether the handle reopens.
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
+        // The file now holds every pending ignore (#674) - still under the
+        // project guard the carry-over read them under, so none can slip in
+        // between. The detached-copy branch above returns before this: the
+        // session's own file did not receive them.
+        self.clear_pending_ignores();
 
         // The installed file deliberately has no history because its chain metadata
         // could not be classified safely. Drop the live mirror at the same commit point:
@@ -1310,6 +1322,8 @@ impl AppState {
         // in), which is the bump rule (`speleodb_session`). Covers close, delete
         // and the project switch, which all route through here.
         self.bump_speleodb_session();
+        // An add's pending ignores (#674) die with the project they belong to.
+        self.clear_pending_ignores();
         // [#473] The discarded-history banner describes the OPEN project; with none
         // open there is nothing for it to describe. Cleared here as well as on every
         // load commit, so closing a project takes its banner with it rather than

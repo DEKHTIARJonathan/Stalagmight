@@ -213,6 +213,21 @@ pub enum Command {
         /// Whether to archive (rename) the original files
         archive_originals: bool,
     },
+    /// Append the survey of another `.stalx` into the OPEN project (#674), as
+    /// one undo step recording only what it brought
+    /// (`UndoData::AddedProjectContent`). Build with
+    /// [`Command::add_project_file`].
+    AddProjectFile {
+        /// Read by the forward command only, and NEVER serialized: undo history
+        /// rides to SpeleoDB in Full mode, so a local path must not enter it
+        /// (the privacy fence on `AppState::is_undoable`). A reloaded entry
+        /// carries an empty path that nothing reads - redo reinstalls the
+        /// recorded content, it never re-reads the file.
+        #[serde(skip)]
+        path: PathBuf,
+        /// The file's own name, no directory, sanitized: the history label.
+        file_name: String,
+    },
     /// Repair the open project's structural integrity (drop dangling refs, re-mint
     /// duplicate UUIDs, re-cascade offsets). Applied directly via the
     /// `repair_project_integrity` IPC command, which records its own snapshot-pair
@@ -707,8 +722,19 @@ impl Command {
             | Command::MoveSection { .. }
             | Command::MoveSegment { .. }
             | Command::MoveStation { .. }
-            | Command::MergeProjects { .. } => true,
+            | Command::MergeProjects { .. }
+            | Command::AddProjectFile { .. } => true,
         }
+    }
+
+    /// The `AddProjectFile` command for `path`, its label taken from the file
+    /// name alone (sanitized and clamped like a receipt's `file_name`).
+    pub fn add_project_file(path: PathBuf) -> Self {
+        let file_name = path
+            .file_name()
+            .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
+            .unwrap_or_default();
+        Command::AddProjectFile { path, file_name }
     }
 
     /// Reduce a reverse log to its NET effect: keep an id only when it occurs an
@@ -896,6 +922,9 @@ impl Command {
                     output_name
                 )
             }
+            Command::AddProjectFile { file_name, .. } => {
+                format!("Add '{file_name}' to project")
+            }
             Command::UntrackImport { section_hashes, .. } => {
                 format!("Forget {} imported sections", section_hashes.len())
             }
@@ -965,7 +994,7 @@ mod tests {
 
         assert_eq!(
             variants.len(),
-            30,
+            31,
             "Command's variant set changed. A removal leaves persisted undo \
              history unloadable at that entry and holed either side of it - keep \
              the tag deserializable, or bump SCHEMA_VERSION and call \

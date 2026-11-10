@@ -1,4 +1,4 @@
-use crate::core::{Command, UndoData};
+use crate::core::{AddedContent, Command, UndoData};
 use crate::models::{ClosureStrategy, SectionId, SectionUpdates, ShotId, ShotUpdates};
 
 use super::AppState;
@@ -509,6 +509,13 @@ impl AppState {
             // which captures before+after snapshots and pushes directly.
             Command::Batch { .. } => UndoData::None,
 
+            // A STUB holding only what the add will be measured against
+            // (#674); `finalize_undo_data` turns it into the record of what the
+            // add brought, and drops the baseline.
+            Command::AddProjectFile { .. } => {
+                UndoData::AddedProjectContent(Box::new(AddedContent::stub(project)))
+            }
+
             // Non-undoable commands
             _ => UndoData::None,
         }
@@ -692,6 +699,31 @@ impl AppState {
             // ProjectSnapshotPair construction directly so after-snapshot
             // failure can trigger rollback.
             Command::Batch { .. } => undo_data,
+
+            // Everything the add brought, measured against the stub's baseline
+            // AFTER the epilogue, so a pre-existing offset the epilogue moved is
+            // in the record too. Ignores come from the pending set the forward
+            // step filled (`project_add.rs`).
+            Command::AddProjectFile { .. } => match undo_data {
+                UndoData::AddedProjectContent(stub) => {
+                    let stub = *stub;
+                    let first_new = stub.baseline.as_ref().map(|b| b.next_section_id);
+                    let ignores = first_new.map_or_else(Vec::new, |first| {
+                        let new: std::collections::HashSet<SectionId> = project
+                            .sections
+                            .iter()
+                            .map(|s| s.id)
+                            .filter(|id| *id >= first)
+                            .collect();
+                        self.ignores_on_sections(&new)
+                    });
+                    stub.finalize(project, ignores)
+                        .map_or(UndoData::None, |content| {
+                            UndoData::AddedProjectContent(Box::new(content))
+                        })
+                }
+                other => other,
+            },
 
             _ => undo_data,
         }

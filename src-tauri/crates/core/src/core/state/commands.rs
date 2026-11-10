@@ -71,6 +71,9 @@ impl AppState {
             | MoveComment { .. }
             | Batch { .. }
             | UntrackImport { .. }
+            // Adding a file INTO the open project is an edit of it (#674),
+            // unlike MergeProjects, which writes a new file.
+            | AddProjectFile { .. }
             | RepairIntegrity
             | UpdateProjectSettings
             | SetSurfaceElevation => false,
@@ -231,6 +234,14 @@ impl AppState {
             | MoveSection { .. }
             | MoveSegment { .. }
             | MoveStation { .. } => SAFE_REFS,
+
+            // A pure addition (#674): it copies a source's own references
+            // between the sections it creates and links nothing existing, so
+            // it can neither dangle a ref nor strand a closure. No rollback
+            // snapshot either - `add_project_file` blocks introduced corruption
+            // itself by removing what it appended, which costs the size of the
+            // file being added rather than of the open project.
+            AddProjectFile { .. } => SAFE_REFS,
         }
     }
 
@@ -802,6 +813,7 @@ impl AppState {
                 file_hashes,
                 section_hashes,
             } => self.untrack_import(file_hashes, section_hashes),
+            Command::AddProjectFile { path, .. } => self.add_project_file(path),
             Command::RepairIntegrity => CommandResult::failure(
                 "RepairIntegrity is applied via repair_project_integrity, not execute()"
                     .to_string(),

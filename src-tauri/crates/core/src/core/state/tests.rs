@@ -23636,6 +23636,9 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute:ReverseSection",
     "execute:Batch:ReverseSection",
     "execute:MoveComment",
+    // Add .stalx (#674) sits next to MergeProjects, which IS a lifecycle
+    // pass-through; this probe catches it being filed there by analogy.
+    "execute:AddProjectFile",
     // history entrypoints
     "undo",
     "redo",
@@ -23666,7 +23669,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        25,
+        26,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -23754,6 +23757,14 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 },
                 swap: false,
             }),
+        );
+        // The gate runs before the file is even read, so a path that does not
+        // exist still has to come back EDIT_DISABLED, not "file not found".
+        assert_disabled(
+            "execute:AddProjectFile",
+            &state.execute(Command::add_project_file(PathBuf::from(
+                "/nonexistent/added.stalx",
+            ))),
         );
     }
 

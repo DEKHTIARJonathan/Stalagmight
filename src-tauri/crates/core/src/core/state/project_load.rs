@@ -386,6 +386,8 @@ impl AppState {
             // moves.
             self.speleodb_commit_open_gate(&mut session, speleo_link.as_ref(), carry_from);
         }
+        // An add's pending ignores (#674) belong to the project that just left.
+        self.clear_pending_ignores();
         // [#473] Under the SAME acquisition that commits the project, so the flag can
         // only ever describe the project in the slot. Unconditional, so a clean load
         // clears the previous project's verdict.
@@ -1054,6 +1056,8 @@ impl AppState {
             self.bump_speleodb_session();
             self.speleodb_commit_open_gate(&mut session, speleo_link.as_ref(), None);
         }
+        // An add's pending ignores (#674) belong to the project that just left.
+        self.clear_pending_ignores();
         // [#473] Under the SAME acquisition that commits the project - a cancelled load
         // never reaches this finalize section, so it cannot leave its verdict on the
         // project the user actually opened.

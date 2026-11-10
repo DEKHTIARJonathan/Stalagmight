@@ -7,13 +7,15 @@ use std::path::{Path, PathBuf};
 use chrono::{TimeZone, Utc};
 use tempfile::TempDir;
 
+use super::fuzz_undo_tests::{canonical_snapshot, describe_diffs, diff_snapshots};
 use super::AppState;
-use crate::core::{Command, CommandResult};
+use crate::core::{Command, CommandResult, UndoData, EDIT_DISABLED_CODE};
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure, Project,
-    SectionData, ShotData, StationMerge, StationRef, SurveyDirection,
+    gps_to_local, AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
+    Project, SectionData, SectionId, ShotData, SpeleoLink, StationMerge, StationRef,
+    SurveyDirection, FEATURE_ID_STRIDE,
 };
-use crate::persistence::Database;
+use crate::persistence::{Database, ResolvedWarning};
 
 /// A shot with a FIXED uuid, so every output that carries shot identity is
 /// deterministic across runs (a minted uuid would make the parity digest
@@ -301,4 +303,512 @@ fn merge_output_is_unchanged_by_the_append_extraction() {
     assert_eq!(merged.loop_closures.len(), 2);
     assert!(merged.loop_closures.iter().all(|c| c.id != 0));
     assert_eq!(merged.station_merges.len(), 2);
+}
+
+// ===========================================================================
+// Add .stalx to current project
+// ===========================================================================
+
+const TARGET_FRAME: (f64, f64) = (20.55, -87.35);
+
+/// The OPEN project every add test adds into: georeferenced, with one earlier
+/// undoable edit on its stack, and saved THROUGH THE APP so the save-time heals
+/// have already happened (a later save/reload then changes nothing of its own).
+fn open_target(dir: &Path, georeferenced: bool) -> (AppState, PathBuf) {
+    let mut target = Project::new("Target".to_string(), Some("Mexico".to_string()));
+    let t0 = target
+        .add_section(section(
+            "T0",
+            vec![shot("t0-0", 0.0, 10.0, 1.0), shot("t0-1", 90.0, 8.0, 1.5)],
+        ))
+        .id;
+    if georeferenced {
+        target
+            .store_zero_datum_without_repositioning(
+                StationRef::new(t0, 0),
+                GpsCoordinates::new(TARGET_FRAME.0, TARGET_FRAME.1, 0.0).unwrap(),
+            )
+            .unwrap();
+    }
+    let path = save_to(dir, "target.stalx", &target);
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(path.clone()).success, "open the target");
+    let created = state.execute(Command::CreateSection {
+        name: Some("T1".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![shot("ignored-by-create", 180.0, 6.0, 2.0)],
+    });
+    assert!(created.success, "an earlier edit for the stack");
+    save(&state);
+    (state, path)
+}
+
+fn save(state: &AppState) {
+    let saved = state.execute(Command::SaveProject { path: None });
+    assert!(saved.success, "save failed: {:?}", saved.error);
+}
+
+fn reopen(state: &AppState, path: &Path) {
+    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.open_project(path.to_path_buf()).success, "reopen");
+}
+
+fn add(state: &AppState, path: &Path) -> CommandResult {
+    state.execute(Command::add_project_file(path.to_path_buf()))
+}
+
+fn assert_same_project(state: &AppState, expected: &str, id_agnostic: bool, what: &str) {
+    let diffs = diff_snapshots(expected, &canonical_snapshot(state, id_agnostic));
+    assert!(diffs.is_empty(), "{what}:\n{}", describe_diffs(&diffs));
+}
+
+fn undo_depth(state: &AppState) -> usize {
+    state.get_undo_stack().len()
+}
+
+fn receipt_warnings(result: &CommandResult) -> Vec<String> {
+    result
+        .import_receipt
+        .as_ref()
+        .expect("an add always carries a receipt")
+        .warnings
+        .clone()
+}
+
+/// INJECTION (tried): dropping the `location` restore from
+/// `AddedContent::remove_from` fails the exactness assertion below on
+/// `location` ("Mexico, Yucatan" vs "Mexico"); dropping the `station_merges`
+/// retain fails it on the dangling merge.
+#[test]
+fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let before = canonical_snapshot(&state, false);
+    let depth = undo_depth(&state);
+
+    let result = add(&state, &alpha);
+    assert!(result.success, "add failed: {:?}", result.error);
+    assert_eq!(result.section_ids.len(), 3, "exactly the added sections");
+    assert_eq!(undo_depth(&state), depth + 1, "the add is ONE undo step");
+    assert_ne!(canonical_snapshot(&state, false), before);
+
+    // The step records the add, not the project.
+    {
+        let stack = state.undo_stack.lock().unwrap();
+        let Some(UndoData::AddedProjectContent(content)) = stack.peek_undo_data() else {
+            panic!("the add must record AddedProjectContent");
+        };
+        let mut recorded: Vec<SectionId> = content.sections.iter().map(|s| s.id).collect();
+        recorded.sort_unstable();
+        let mut created = result.section_ids.clone();
+        created.sort_unstable();
+        assert_eq!(
+            recorded, created,
+            "only the add's own sections are recorded"
+        );
+        assert_eq!(content.zero_datums.len(), 1);
+        assert_eq!(content.station_merges.len(), 1);
+        assert_eq!(content.loop_closures.len(), 1);
+        assert_eq!(content.station_comments.len(), 2);
+        assert!(
+            content.baseline.is_none(),
+            "the stub baseline never persists"
+        );
+    }
+
+    assert!(state.undo().success);
+    assert_same_project(
+        &state,
+        &before,
+        false,
+        "undo of an add must restore the project",
+    );
+    assert_eq!(undo_depth(&state), depth, "the earlier history is intact");
+    assert!(
+        state.undo().success,
+        "the edit made before the add still undoes"
+    );
+}
+
+/// INJECTION (tried): letting the redo fall through to the catch-all, which
+/// re-runs the add, mints fresh section and closure ids and fails below.
+#[test]
+fn redo_of_an_add_reproduces_the_same_ids() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+
+    let result = add(&state, &alpha);
+    assert!(result.success);
+    let after = canonical_snapshot(&state, false);
+    let closure_ids: Vec<u64> = state
+        .get_project_state()
+        .unwrap()
+        .loop_closures
+        .iter()
+        .map(|c| c.id)
+        .collect();
+
+    assert!(state.undo().success);
+    assert!(state.redo().success);
+    // Not id-agnostic: section ids, shot ids, uuids and closure ids all match.
+    assert_same_project(
+        &state,
+        &after,
+        false,
+        "redo must reinstall the same content",
+    );
+    let project = state.get_project_state().unwrap();
+    for id in &result.section_ids {
+        assert!(project.get_section(*id).is_some(), "section {id} is back");
+    }
+    let redone: Vec<u64> = project.loop_closures.iter().map(|c| c.id).collect();
+    assert_eq!(redone, closure_ids);
+}
+
+/// The step is persisted with the project and still undoes, then redoes, after
+/// a save and a reopen - where the command no longer even names the file.
+/// INJECTION (tried): the catch-all redo fails here too - after a reload the
+/// command's path is empty, so a re-run cannot even find the file.
+#[test]
+fn add_undo_and_redo_survive_save_and_reload() {
+    let temp = TempDir::new().unwrap();
+    let (state, path) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let before = canonical_snapshot(&state, true);
+
+    assert!(add(&state, &alpha).success);
+    save(&state);
+    let after = canonical_snapshot(&state, true);
+    // The source is gone: neither undo nor redo may need it.
+    std::fs::remove_file(&alpha).unwrap();
+
+    reopen(&state, &path);
+    assert_same_project(&state, &after, true, "reload changes nothing");
+    assert!(state.undo().success, "undo after reload");
+    assert_same_project(&state, &before, true, "undo after reload restores");
+    assert!(state.redo().success, "redo after reload");
+    assert_same_project(&state, &after, true, "redo after reload reinstalls");
+}
+
+#[test]
+fn read_only_gate_refuses_an_add_before_reading_the_file() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let before = canonical_snapshot(&state, false);
+    let depth = undo_depth(&state);
+
+    state.set_edit_enabled(false);
+    let refused = add(&state, &alpha);
+    assert!(!refused.success);
+    assert!(
+        refused
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with(EDIT_DISABLED_CODE)),
+        "{:?}",
+        refused.error
+    );
+    assert_same_project(&state, &before, false, "a refused add changes nothing");
+    assert_eq!(undo_depth(&state), depth);
+}
+
+/// The source with ignorable warnings and their ignores: one keyed by uuid, one
+/// legacy row keyed by position only.
+fn source_with_ignores(dir: &Path) -> PathBuf {
+    let mut p = Project::new("Ignored".to_string(), None);
+    let s = p
+        .add_section(section(
+            "I0",
+            vec![
+                shot("i0-0", 10.0, 4.0, 1.0),
+                shot("i0-1", 20.0, 250.0, 1.0),
+                shot("i0-2", 30.0, 300.0, 1.0),
+            ],
+        ))
+        .id;
+    let path = save_to(dir, "ignored.stalx", &p);
+    let db = Database::open_existing(&path).unwrap();
+    for (seq, uuid) in [(1, Some("i0-1")), (2, None)] {
+        db.save_resolved_warning(&ResolvedWarning {
+            section_id: s,
+            shot_id: s * FEATURE_ID_STRIDE + seq,
+            warning_code: "LONG_SHOT".to_string(),
+            resolved_at: fixed_time(3),
+            resolved_comment: Some("measured twice".to_string()),
+            shot_uuid: uuid.map(str::to_string),
+        })
+        .unwrap();
+    }
+    path
+}
+
+fn long_shot_verdicts(state: &AppState, section_ids: &[SectionId]) -> Vec<bool> {
+    let project = state.get_project_state().unwrap();
+    state
+        .compute_project_warnings(&project, None)
+        .into_iter()
+        .filter(|w| w.code == "LONG_SHOT" && section_ids.contains(&w.section_id))
+        .map(|w| w.is_resolved)
+        .collect()
+}
+
+/// INJECTION (tried): skipping `add_pending_ignores` in `add_project_file`
+/// fails the first assertion; dropping the `pending_ignores()` extend from the
+/// save's carry-over fails the post-reload one.
+#[test]
+fn ignored_warnings_survive_the_add_a_save_and_a_reload() {
+    let temp = TempDir::new().unwrap();
+    let (state, path) = open_target(temp.path(), true);
+    let source = source_with_ignores(temp.path());
+
+    let result = add(&state, &source);
+    assert!(result.success, "{:?}", result.error);
+    let ids = result.section_ids.clone();
+    assert_eq!(
+        long_shot_verdicts(&state, &ids),
+        vec![true, true],
+        "both carried ignores are honored before any save"
+    );
+
+    save(&state);
+    reopen(&state, &path);
+    assert_eq!(
+        long_shot_verdicts(&state, &ids),
+        vec![true, true],
+        "the save wrote them into the open file"
+    );
+
+    assert!(state.undo().success);
+    assert!(long_shot_verdicts(&state, &ids).is_empty());
+    assert!(state.redo().success);
+    assert_eq!(long_shot_verdicts(&state, &ids), vec![true, true]);
+}
+
+fn linked(project_name: &str) -> SpeleoLink {
+    SpeleoLink {
+        endpoint: "http://speleodb.invalid/".to_string(),
+        project_id: "22222222-2222-2222-2222-222222222222".to_string(),
+        project_name: project_name.to_string(),
+        base_commit_sha: Some("def456".to_string()),
+        has_unpushed_edits: false,
+        last_edit_at: None,
+        last_verify_at: None,
+        undo_mode: None,
+    }
+}
+
+/// INJECTION (tried): dropping the `source.link` branch in `add_receipt` fails
+/// the receipt assertion. The byte comparison guards the private copy; it can
+/// only fire on an older-schema source (which an open would migrate), so it is
+/// a tripwire here rather than a proven guard.
+#[test]
+fn linked_source_copies_data_but_never_the_link() {
+    let temp = TempDir::new().unwrap();
+    let (state, path) = open_target(temp.path(), true);
+    let source = save_to(temp.path(), "charlie.stalx", &source_charlie());
+    Database::open_existing(&source)
+        .unwrap()
+        .save_speleo_link(Some(&linked("Upstream Survey")))
+        .unwrap();
+    let source_bytes = std::fs::read(&source).unwrap();
+
+    let result = add(&state, &source);
+    assert!(
+        result.success,
+        "a linked source is not refused: {:?}",
+        result.error
+    );
+    assert_eq!(result.section_ids.len(), 1, "its survey data was copied");
+    assert!(
+        receipt_warnings(&result).iter().any(|w| w
+            == "'charlie.stalx' is linked to SpeleoDB project 'Upstream Survey'; its data \
+                was copied, that project is unchanged"),
+        "{:?}",
+        receipt_warnings(&result)
+    );
+    assert_eq!(
+        std::fs::read(&source).unwrap(),
+        source_bytes,
+        "the source file is untouched"
+    );
+
+    save(&state);
+    let link = Database::open_existing(&path)
+        .unwrap()
+        .load_speleo_link()
+        .unwrap();
+    assert!(link.is_none(), "the open project did not acquire the link");
+}
+
+/// INJECTION (tried): disabling the `imported_file_hashes.contains(&identity)`
+/// check fails the second-add assertion.
+#[test]
+fn adding_the_same_stalx_twice_adds_again_with_a_warning() {
+    let temp = TempDir::new().unwrap();
+    let (state, path) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+
+    let first = add(&state, &alpha);
+    assert!(first.success);
+    assert!(
+        !receipt_warnings(&first)
+            .iter()
+            .any(|w| w.contains("already added")),
+        "the first add is not a duplicate"
+    );
+
+    // Across a save and a reopen: the identity rides the dedup set.
+    save(&state);
+    reopen(&state, &path);
+    let second = add(&state, &alpha);
+    assert!(second.success, "a duplicate is still added");
+    assert_eq!(second.section_ids.len(), 3);
+    assert!(
+        receipt_warnings(&second).iter().any(|w| w
+            == "'alpha.stalx' was already added to this project; its sections were added again"),
+        "{:?}",
+        receipt_warnings(&second)
+    );
+
+    // A copy of the open project itself is the same survey a second time.
+    let copy = temp.path().join("target-copy.stalx");
+    std::fs::copy(&path, &copy).unwrap();
+    let third = add(&state, &copy);
+    assert!(third.success);
+    assert!(receipt_warnings(&third)
+        .iter()
+        .any(|w| w.contains("is a copy of the open project")));
+}
+
+#[test]
+fn an_add_is_refused_with_nothing_changed() {
+    let temp = TempDir::new().unwrap();
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+
+    let nothing_open = AppState::new().unwrap();
+    let refused = add(&nothing_open, &alpha);
+    assert!(!refused.success);
+    assert!(nothing_open.get_project_state().is_none());
+
+    let (state, path) = open_target(temp.path(), true);
+    let before = canonical_snapshot(&state, false);
+    let depth = undo_depth(&state);
+    let garbage = temp.path().join("garbage.stalx");
+    std::fs::write(&garbage, b"this is not a sqlite database").unwrap();
+    for (what, target) in [
+        ("the open project's own file", path),
+        ("a file that is not a project", garbage),
+        (
+            "a file that does not exist",
+            temp.path().join("missing.stalx"),
+        ),
+    ] {
+        let refused = add(&state, &target);
+        assert!(!refused.success, "{what} must be refused");
+        assert!(refused.import_receipt.is_none());
+        assert_same_project(&state, &before, false, what);
+        assert_eq!(undo_depth(&state), depth, "{what} pushed nothing");
+    }
+}
+
+/// The orphan-placement signal is `CommandResult::section_ids` holding exactly
+/// the added sections; the dialog's own queries then find the unanchored ones.
+#[test]
+fn added_sections_are_reported_for_orphan_placement() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let charlie = save_to(temp.path(), "charlie.stalx", &source_charlie());
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+
+    let island = add(&state, &charlie);
+    assert!(island.success);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(project.count_unanchored_sections(&island.section_ids), 1);
+
+    let anchored = add(&state, &alpha);
+    let project = state.get_project_state().unwrap();
+    // A0 + A1 hang off Alpha's datum; A2 is a free island inside Alpha.
+    assert_eq!(project.count_unanchored_sections(&anchored.section_ids), 1);
+}
+
+/// A georeferenced source lands at its GPS position in the open project's
+/// frame, rigidly, and nothing that was already there moves.
+#[test]
+fn a_georeferenced_source_is_placed_by_its_datum() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let before = state.get_project_state().unwrap();
+
+    let result = add(&state, &alpha);
+    assert!(result.success);
+    let project = state.get_project_state().unwrap();
+    let datum_station = StationRef::new(result.section_ids[0], 0);
+    let at = project.compute_station_raw_coords(datum_station).unwrap();
+    let expected = gps_to_local(
+        &GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+        &GpsCoordinates::new(TARGET_FRAME.0, TARGET_FRAME.1, 0.0).unwrap(),
+    );
+    assert!(
+        (at.x - expected.0).abs() < 1e-6 && (at.y - expected.1).abs() < 1e-6,
+        "datum station at ({}, {}), expected {expected:?}",
+        at.x,
+        at.y
+    );
+    for section in &before.sections {
+        assert_eq!(
+            project.section_offsets.get(&section.id),
+            before.section_offsets.get(&section.id),
+            "pre-existing section {} must not move",
+            section.id
+        );
+    }
+}
+
+/// Into a project with NO frame, the source's datum becomes the frame (its
+/// station on the origin) and the open project's free sections stay put.
+#[test]
+fn a_source_datum_frames_an_unreferenced_project_without_moving_it() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), false);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let before = state.get_project_state().unwrap();
+
+    let result = add(&state, &alpha);
+    assert!(result.success);
+    let project = state.get_project_state().unwrap();
+    let at = project
+        .compute_station_raw_coords(StationRef::new(result.section_ids[0], 0))
+        .unwrap();
+    assert!(
+        at.x.abs() < 1e-6 && at.y.abs() < 1e-6,
+        "({}, {})",
+        at.x,
+        at.y
+    );
+    for section in &before.sections {
+        assert_eq!(
+            project.section_offsets.get(&section.id),
+            before.section_offsets.get(&section.id)
+        );
+    }
+}
+
+/// Undo history rides to SpeleoDB in Full mode, so the command's serialized
+/// form must not carry the local path - only the file's name.
+#[test]
+fn the_add_command_never_serializes_its_path() {
+    let private = PathBuf::from("/home/user1/private/survey.stalx");
+    let command = Command::add_project_file(private);
+    let json = serde_json::to_string(&command).unwrap();
+    assert!(!json.contains("/home/user1"), "{json}");
+    assert!(json.contains("survey.stalx"));
+    assert!(!AppState::is_batch_allowed(&command));
+    assert_eq!(command.description(), "Add 'survey.stalx' to project");
 }
