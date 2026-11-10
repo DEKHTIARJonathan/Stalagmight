@@ -24,7 +24,9 @@
  * "Quit now" is never the default. It saves unsaved edits on this computer, then
  * quits without waiting; the backend is told (`arm_forced_exit`) right before
  * the window goes, so its own exit hook (`commands/exit_wait.rs`) cuts the
- * operation instead of holding the exit for it.
+ * operation instead of holding the exit for it. When the window stays after all
+ * (its destroy or the update install failed), the arm is taken back
+ * (`disarm_forced_exit`).
  */
 import { create } from 'zustand';
 import i18n from '../i18n';

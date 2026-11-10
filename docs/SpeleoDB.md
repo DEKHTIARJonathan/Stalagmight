@@ -72,8 +72,11 @@ management, local imports and local exports remain separate application features
 ## Cached copies on this computer
 
 Every project opened from SpeleoDB lives at
-`<cache>/speleodb/<project_id>/project.stalx`. The project ID must be a UUID before
-it becomes a path: opening a linked file whose ID is not one is refused, and the
+`<cache>/speleodb/<project_id>/project.stalx`. The project ID must be a UUID in its
+canonical spelling (lowercase and hyphenated, as SpeleoDB sends it; a braced,
+`urn:uuid:`, hyphenless or uppercase spelling of the same UUID is refused, since it
+would be a second directory or request path for one project) before it becomes a
+path: opening a linked file whose ID is not one is refused, and the
 cache path itself (`speleodb_cache_path`, used by downloads, revision restores and
 the upload snapshot) refuses such an ID again for every caller, so a crafted
 `speleo_link` row cannot steer a write out of the cache. The `.stalx` records its instance,
@@ -82,7 +85,11 @@ email inside it would reach every collaborator. The account is recorded beside t
 copy instead, in `owner.json`, which never leaves the machine. It is written when a
 signed-in account opens the copy online (download, or the fast-forward local open
 after the server showed that account the history) and when a project is published.
-It is not written for offline or signed-out opens.
+It is not written for offline or signed-out opens. It is only ever read or written
+for the copy in the app's own cache (never for a file elsewhere that merely sits
+in a `<project_id>/project.stalx` folder), through a temporary file the write
+creates itself, so a symlink planted under the temporary name is never written
+through.
 
 Un-uploaded work belongs to the account that made it, and no other account ever
 takes it over:
@@ -147,7 +154,13 @@ warning and a "Remove copy and lose my changes" button. Only that confirmation t
 the backend to remove such a copy; without it the backend refuses. Signed in, the
 backend also refuses another account's (or another instance's) copy, which Home does
 not list then anyway; signed out, any copy can be removed. The project open right
-now is never removed. Removal sends the `.stalx` to the OS trash where there is
+now is never removed: the delete itself asks again under the project lock, so a copy
+opened after the confirmation's check is refused, never closed and trashed. Nor is a
+`.stalx` in the cache that is no longer linked to SpeleoDB (an unlink keeps the file,
+which may have been edited and saved since): no listing shows it, and Home's
+removal, the purge and sign-out's Discard all refuse it, whatever the consent. A
+project folder in the cache that is a symlink is never followed by a removal (it
+would reach whatever it points at). Removal sends the `.stalx` to the OS trash where there is
 one, drops its recents row, and deletes the rest of its directory (owner record and
 SQLite sidecars). The file goes to the trash under the project's name (for example
 `Synthetic Cave.stalx`, made a safe file name on every OS, with invisible Unicode
@@ -174,7 +187,9 @@ the owner-less ones from its instance; signed out, every copy of every account a
 instance. Signed in, another account's copy (or another instance's) is never counted,
 listed or removed, not even by "Delete everything": its un-uploaded work is not this
 user's to throw away. The backend applies the same rule when it purges, and a session
-it cannot read at all removes nothing. Copies with un-uploaded or unreadable state are
+it cannot read at all removes nothing. The purge reaches exactly the copies the
+listing shows: an unlinked `.stalx` in the cache is skipped, and not reported, since
+the confirmation never named it. Copies with un-uploaded or unreadable state are
 listed in the confirmation and kept by default ("Keep those, remove the rest").
 Deleting them too takes a second confirmation. The backend re-checks every copy when
 it removes it. Each removed copy's lock is handled as above, and the result lists the
@@ -344,7 +359,10 @@ do not read the live-test environment variables.
 HTTP statuses retain their existing typed frontend actions: re-login on an expired
 session, read/fence handling for permissions, retryable read errors, and dirty-state
 retention for failed writes. Error text is for display; it does not determine sync
-or ownership decisions. Diagnostic transport errors omit request URLs. A TLS
+or ownership decisions. The message of an error reply (its `detail`, `error` or
+first `errors` entry) is the server's text, so it is cut to 240 characters (the
+contract-mismatch bound below) where it is read, before it reaches the log, an
+error dialog, a removal warning or the purge report. Diagnostic transport errors omit request URLs. A TLS
 handshake or certificate failure is classified as TLS from the typed `rustls`
 error. A 2xx body that does not match the SDK contract (for example a new server
 enum value) is a parse error: it keeps the SDK decoder detail, with every
@@ -621,7 +639,16 @@ holds the exit for a transfer, with no prompt. For the routes that request a clo
   deadline: the quit consumes it, and declining either question, a refused window
   close or a guard taking the close over drops it, so a later quit waits again.
   Right before the window goes it calls `arm_forced_exit` so the backend may cut
-  the operation.
+  the operation. When the window stays after all (its destroy, or the update
+  install, failed), `disarm_forced_exit` takes that arm back, so the app that is
+  still running does not cut a transfer the user starts or quits over next.
+- One quit attempt asks its questions at a time. A close request while the
+  unsent-input or the import / dive-plan question is on screen (the user pressed
+  the window X again) joins the attempt that is asking instead of starting
+  another, whose own question would have answered the pending one with "no" and
+  dropped the update restart or forced quit riding on it. Whatever was armed for
+  the quit stays armed for the asking attempt, which still runs every guard (a
+  pre-confirmation the joining request carried is dropped).
 
 The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
 the backstop for a user-visible transfer still running when the exit arrives anyway.

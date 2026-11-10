@@ -12,7 +12,8 @@
 //!    X, an OS close, the update restart. While a transfer is in flight it keeps
 //!    the window, toasts that the app will close when the work finishes, shows
 //!    progress, and quits once it is done. "Quit now" is an explicit in-app
-//!    choice behind a warning; it arms [`arm_forced_exit`].
+//!    choice behind a warning; it arms [`arm_forced_exit`], and
+//!    [`disarm_forced_exit`] takes the arm back when the window stays after all.
 //! 2. This hook is the backstop for a transfer that is still running when the
 //!    exit arrives anyway (the window destroyed without the listener, or a quit
 //!    route that never asks the window to close - on macOS the native app-menu
