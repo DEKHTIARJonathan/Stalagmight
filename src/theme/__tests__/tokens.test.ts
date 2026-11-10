@@ -702,8 +702,8 @@ describe('highlight button (warning) contrast', () => {
 /**
  * Warning PROSE (`text-warning-text`) sits on the panel, on the page background and
  * on the warning washes (`bg-warning-10` / `bg-warning-20`, composited over either):
- * the SpeleoDB un-uploaded tab, the remove-copy and purge warnings, the insecure-HTTP
- * note. Every theme must keep it at WCAG AA for normal text, 4.5:1, on all six.
+ * the remove-copy and purge warnings, the insecure-HTTP note, the workspace's
+ * un-uploaded line. Every theme must keep it at WCAG AA for normal text, 4.5:1, on all six.
  * `--cc-warning` itself is a fill colour and is not held to this.
  */
 describe('warning text contrast', () => {
@@ -728,4 +728,38 @@ describe('warning text contrast', () => {
     // 2.64:1 - what the un-uploaded tab and the warning boxes used to show.
     expect(contrast(tokens['--cc-warning']!, solid(tokens['--cc-warning-20']!, tokens['--cc-panel']!))).toBeLessThan(4.5);
   });
+});
+
+/**
+ * The SpeleoDB tab with un-uploaded changes says so by its text colour alone
+ * (src/components/SingleSystemView/LeftWorkspace.tsx). Selected, it is the warning
+ * text on the selected tab's accent wash (`bg-accent-10` over the panel): AA,
+ * 4.5:1. Not selected, it is dimmed toward the panel the way idle tabs are dimmer
+ * than the selected one (`text-warning-text-dim`, a `color-mix` in
+ * tailwind.config.js), and must still read: 3:1 or better on the panel.
+ */
+describe('warning tab text contrast', () => {
+  const twSource = fs.readFileSync(path.resolve(__dirname, '../../../tailwind.config.js'), 'utf8');
+  const dim = /'warning-text-dim':\s*'color-mix\(in srgb, var\(--cc-warning-text\) (\d+)%, var\(--cc-panel\)\)'/.exec(twSource);
+
+  it('dims the warning text by mixing it toward the panel', () => {
+    expect(dim, "tailwind.config.js 'warning-text-dim'").not.toBeNull();
+  });
+
+  const share = Number(dim?.[1] ?? 0) / 100;
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: selected at AA on the accent wash, idle at 3:1 dimmed on the panel`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const panel = tokens['--cc-panel']!;
+      const text = tokens['--cc-warning-text']!;
+      const selected = contrast(text, solid(tokens['--cc-accent-10']!, panel));
+      expect(selected, `${theme}: selected ${selected.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+      const rgb = [1, 3, 5].map((i) => parseInt(text.slice(i, i + 2), 16));
+      const dimmed = solid(`rgba(${rgb.join(', ')}, ${share})`, panel);
+      const idle = contrast(dimmed, panel);
+      expect(idle, `${theme}: dimmed ${dimmed} on ${panel} is ${idle.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+      // Visibly dimmer than the full-strength text the selected tab shows.
+      expect(idle).toBeLessThan(contrast(text, panel) * 0.8);
+    });
+  }
 });

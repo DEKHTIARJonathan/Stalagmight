@@ -136,4 +136,43 @@ test.describe('left panel width', () => {
     });
     expect(report).toEqual([]);
   });
+
+  test('the un-uploaded SpeleoDB tab differs only by its text colour: dimmed idle, full selected', async ({ page }) => {
+    const tabStyle = (id: 'sections' | 'speleodb') => page.getByTestId(`workspace-tab-${id}`).evaluate((tab) => {
+      const cs = getComputedStyle(tab);
+      return { background: cs.backgroundColor, shadow: cs.boxShadow, weight: cs.fontWeight, color: cs.color, borderBottom: cs.borderBottomStyle };
+    });
+    /** A colour expression resolved the way the browser paints it, under the tab list. */
+    const resolve = (expr: string) => page.getByTestId('workspace-tab-sections').evaluate((tab, value) => {
+      const probe = document.createElement('span');
+      probe.style.color = value;
+      tab.parentElement!.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    }, expr);
+    await page.getByTestId('workspace-tab-sections').click();
+    await page.mouse.move(0, 0);
+    const sectionsSelected = await tabStyle('sections');
+    const idle = await tabStyle('speleodb');
+    // Idle: no wash, no rule, the idle weight - only the dimmed warning text.
+    expect(idle.background).toBe('rgba(0, 0, 0, 0)');
+    expect(idle.shadow).toBe('none');
+    expect(idle.borderBottom).toBe('none');
+    expect(idle.weight).toBe('400');
+    expect(idle.color).toBe(await resolve('color-mix(in srgb, var(--cc-warning-text) 75%, var(--cc-panel))'));
+    expect(idle.color).not.toBe(await resolve('var(--cc-warning-text)'));
+
+    await page.getByTestId('workspace-tab-speleodb').click();
+    await expect(page.getByTestId('workspace-tab-speleodb')).toHaveAttribute('aria-selected', 'true');
+    const selected = await tabStyle('speleodb');
+    // Selected: the very indicator Sections uses, with the full-strength warning text.
+    expect(selected.background).toBe(sectionsSelected.background);
+    expect(selected.weight).toBe(sectionsSelected.weight);
+    expect(selected.shadow).toBe('none');
+    expect(selected.color).toBe(await resolve('var(--cc-warning-text)'));
+    // Sections, now idle, looks like any idle tab.
+    expect((await tabStyle('sections')).background).toBe('rgba(0, 0, 0, 0)');
+  });
 });
+

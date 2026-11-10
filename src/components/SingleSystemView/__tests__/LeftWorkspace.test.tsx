@@ -114,12 +114,13 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
   it.each([
     ['saved but not uploaded', () => useSpeleoStore.setState({ link: { ...link, editState: 'editing', hasUnpushedEdits: true } })],
     ['unsaved edits', () => { useSpeleoStore.setState({ link: { ...link, editState: 'editing' } }); useProjectStore.setState({ isDirty: true }); }],
-  ])('un-uploaded changes (%s) get the yellow "!" and the warning tab treatment', (_label, seed) => {
+  ])('un-uploaded changes (%s) get the yellow "!" and the warning text colour', (_label, seed) => {
     seed();
     render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
     expect(badge()).toHaveClass('text-warning-text');
-    expect(speleoTab()).toHaveClass('text-warning-text');
+    // Not selected (Sections is): the warning text, dimmed.
+    expect(speleoTab()).toHaveClass('text-warning-text-dim');
     expect(speleoTab()).toHaveAccessibleDescription('Changes on this computer have not been uploaded to SpeleoDB yet.');
     expect(speleoTab()).toHaveAttribute('title', 'Changes on this computer have not been uploaded to SpeleoDB yet.');
   });
@@ -144,5 +145,42 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     render(<LeftWorkspace sections={<div />} />);
     expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
+  });
+
+  /** The tab's look, without the layout classes every tab shares. */
+  const look = (tab: HTMLElement) => tab.className.split(/\s+/)
+    .filter((c) => /^(bg-|text-(?!sm$)|font-|shadow|border|ring)/.test(c)).sort();
+  const unuploaded = () => useSpeleoStore.setState({ link: { ...link, editState: 'editing', hasUnpushedEdits: true } });
+
+  it('un-uploaded, not selected: only the dimmed warning text - no wash, no rule, no selected weight', () => {
+    unuploaded();
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('aria-selected', 'false');
+    expect(look(speleoTab())).toEqual(['text-warning-text-dim']);
+    expect(speleoTab().className).not.toMatch(/bg-warning|shadow|inset/);
+    // Sections, the selected tab, keeps the selected indicator.
+    expect(look(screen.getByRole('tab', { name: 'Sections' }))).toEqual(['bg-accent-10', 'font-medium']);
+  });
+
+  it('un-uploaded, selected: the same selected indicator as Sections, with the full-strength warning text', () => {
+    unuploaded();
+    const { unmount } = render(<LeftWorkspace sections={<div />} />);
+    const sectionsSelected = look(screen.getByRole('tab', { name: 'Sections' }));
+    unmount();
+    useUIStore.setState({ leftWorkspace: 'speleodb', surveyLeftWorkspace: 'speleodb' });
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('aria-selected', 'true');
+    expect(look(speleoTab())).toEqual([...sectionsSelected, 'text-warning-text'].sort());
+    expect(speleoTab().className).not.toMatch(/bg-warning|shadow|inset|text-warning-text-dim/);
+    expect(badge()).toHaveClass('text-warning-text');
+  });
+
+  it.each(['selected', 'not selected'] as const)('no warning, %s: exactly the Sections tab look', (which) => {
+    useSpeleoStore.setState({ link: { ...link, editState: 'editing' } });
+    if (which === 'selected') useUIStore.setState({ leftWorkspace: 'speleodb', surveyLeftWorkspace: 'speleodb' });
+    render(<LeftWorkspace sections={<div />} />);
+    const sections = screen.getByRole('tab', { name: 'Sections' });
+    expect(look(speleoTab())).toEqual(which === 'selected' ? ['bg-accent-10', 'font-medium'] : ['text-text-secondary']);
+    expect(look(sections)).toEqual(which === 'selected' ? ['text-text-secondary'] : ['bg-accent-10', 'font-medium']);
   });
 });

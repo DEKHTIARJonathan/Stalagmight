@@ -32,6 +32,10 @@ export default {
         'warning-on': 'var(--cc-warning-on)',
         // Warning prose (text-warning-text): AA on the panel and the warning washes.
         'warning-text': 'var(--cc-warning-text)',
+        // The same warning text dimmed toward the panel, for an idle tab that carries
+        // a warning (the SpeleoDB tab with un-uploaded changes): 3:1 or better on the
+        // panel in every theme (tokens.test.ts).
+        'warning-text-dim': 'color-mix(in srgb, var(--cc-warning-text) 75%, var(--cc-panel))',
         error: 'var(--cc-error)',
         success: 'var(--cc-success)',
 
