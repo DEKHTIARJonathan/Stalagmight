@@ -581,7 +581,7 @@ function buildSurveyData(
     sections,
     shotCount: N,
     shotIds,
-    shotNumbers: env.shot_numbers ? Uint32Array.from(env.shot_numbers) : undefined,
+    ...(env.shot_numbers ? { shotNumbers: Uint32Array.from(env.shot_numbers) } : {}),
     shotSectionIds,
     shotAzimuthIn,
     shotAzimuthOut,
