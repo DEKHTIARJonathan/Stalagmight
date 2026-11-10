@@ -13,7 +13,7 @@ use super::AppState;
 use crate::core::{AddedContent, Command, CommandResult, UndoData, EDIT_DISABLED_CODE};
 use crate::models::{
     gps_to_local, AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
-    Project, SectionData, SectionId, ShotData, SpeleoLink, StationMerge, StationRef,
+    Project, SectionData, SectionId, ShotData, ShotKind, SpeleoLink, StationMerge, StationRef,
     SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::{Database, ResolvedWarning};
@@ -1174,4 +1174,60 @@ fn the_section_id_budget_admits_an_exact_fit_and_refuses_one_more() {
             assert_same_project(&state, &before, false, "nothing was appended");
         }
     }
+}
+
+/// A pre-v13 source: opening it migrates the read copy, which seeds every
+/// legacy reference shot as Jump and leaves the #27 Jump/Reference backfill
+/// pending for the open path. The add finishes it on the source's own graph,
+/// as an open would - otherwise a dangling tie stays a swimmable Jump in the
+/// destination for good, since the pending flag dies with the read copy.
+/// Synthesized the way the stalx reader's test does: a current file carrying
+/// the migration's Jump seed and the pending flag. A dangling virtual shot
+/// reaches real survey at one point only, so the backfill calls it Reference.
+/// INJECTION (tried): dropping the `kind_classification_pending` branch in
+/// `load_add_source` leaves the flagged copy's shot a Jump and fails the
+/// Reference assertion.
+#[test]
+fn a_pending_kind_classification_in_the_source_is_finished_by_the_add() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let mut legacy = Project::new("Legacy".to_string(), None);
+    let mut data = section(
+        "L0",
+        vec![shot("l0-0", 10.0, 5.0, 2.0), shot("l0-1", 40.0, 3.0, 2.5)],
+    );
+    data.shots[1].kind = ShotKind::Jump;
+    legacy.add_section(data);
+    let unflagged = save_to(temp.path(), "unflagged.stalx", &legacy);
+    let flagged = save_to(temp.path(), "flagged.stalx", &legacy);
+    rusqlite::Connection::open(&flagged)
+        .unwrap()
+        .execute(
+            "INSERT INTO project_settings (key, value) VALUES ('pending_kind_classification', '1')",
+            [],
+        )
+        .unwrap();
+
+    let kind_after_add = |path: &Path| {
+        let result = add(&state, path);
+        assert!(result.success, "{:?}", result.error);
+        let project = state.get_project_state().unwrap();
+        project.get_section(result.section_ids[0]).unwrap().shots[1].kind
+    };
+    assert_eq!(
+        kind_after_add(&unflagged),
+        ShotKind::Jump,
+        "without the flag the stored kind is kept"
+    );
+    assert_eq!(
+        kind_after_add(&flagged),
+        ShotKind::Reference,
+        "with the flag the add classifies the source like an open"
+    );
+    assert!(
+        Database::open_existing(&flagged)
+            .unwrap()
+            .is_kind_classification_pending(),
+        "the source file itself is untouched"
+    );
 }

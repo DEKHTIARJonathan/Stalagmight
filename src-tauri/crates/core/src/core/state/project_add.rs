@@ -18,8 +18,8 @@ use crate::core::{
     extend_unique_hashes, AddedContent, CarriedIgnore, Command, CommandResult, UndoData,
 };
 use crate::models::{
-    gps_to_local, warning_is_ignorable, GpsCoordinates, Project, SectionId, SpeleoLink,
-    FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
+    gps_to_local, warning_is_ignorable, ClassifyScope, GpsCoordinates, Project, SectionId,
+    SpeleoLink, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::{Database, ResolvedWarning};
 
@@ -68,16 +68,26 @@ fn load_add_source(path: &Path, label: &str) -> Result<AddSource, String> {
     // no link: the copy carries survey data only either way, so the link only
     // ever decides one receipt line.
     let link = db.load_speleo_link().ok().flatten();
+    // The v12->v13 migration that just ran on the copy seeded every legacy
+    // reference shot as Jump and left this flag for the open path to finish.
+    // Read before the copy is dropped: it goes with the temp database, so an
+    // add that skipped it would leave those shots swimmable for good.
+    let kind_classification_pending = db.is_kind_classification_pending();
     drop(db);
     refuse_non_finite_placement(&project, label)?;
 
     // What an open does to a freshly read project, in the same order
     // (`do_load_project_full`): every shot gets a uuid (the identity ignores
-    // and cross-references are re-keyed onto), legacy closures get ids, and the
-    // derived offsets are re-solved rather than trusted.
+    // and cross-references are re-keyed onto), legacy closures get ids, the
+    // derived offsets are re-solved rather than trusted, and a pending #27
+    // Jump/Reference backfill is run on the source's own graph. Nothing is
+    // written back: the copy is discarded and the source stays untouched.
     project.ensure_shot_uuids();
     project.assign_closure_ids();
     project.redrive_offsets_after_load();
+    if kind_classification_pending {
+        project.classify_virtual_shots(&ClassifyScope::WholeProject);
+    }
     Ok(AddSource {
         project,
         ignores,
